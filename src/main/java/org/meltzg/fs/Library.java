@@ -3,13 +3,19 @@
  */
 package org.meltzg.fs;
 
+import lombok.Data;
+
+@Data
 public class Library {
     static {
         System.loadLibrary("jmtp");
     }
 
     private native int foo();
+
+    private int foo;
+
     public int someLibraryMethod() {
-        return foo();
+        return foo() * foo;
     }
 }

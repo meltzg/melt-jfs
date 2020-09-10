@@ -9,6 +9,7 @@ import static org.junit.Assert.*;
 public class LibraryTest {
     @Test public void testSomeLibraryMethod() {
         Library classUnderTest = new Library();
-        assertEquals("someLibraryMethod should return '4'", 4, classUnderTest.someLibraryMethod());
+        classUnderTest.setFoo(4);
+        assertEquals("someLibraryMethod should return '16'", 16, classUnderTest.someLibraryMethod());
     }
 }

@@ -4,7 +4,12 @@
 package org.meltzg.fs;
 
 public class Library {
-    public boolean someLibraryMethod() {
-        return true;
+    static {
+        System.loadLibrary("jmtp");
+    }
+
+    private native int foo();
+    public int someLibraryMethod() {
+        return foo();
     }
 }

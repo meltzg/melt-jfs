@@ -34,3 +34,6 @@ build
 # Ignore IDE files
 .idea
 .vscode
+
+# Ignore generated JNI headers
+src/main/c/headers/org_meltzg*

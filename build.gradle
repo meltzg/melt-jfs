@@ -9,21 +9,85 @@
 plugins {
     // Apply the java-library plugin to add support for Java Library
     id 'java-library'
+    id 'c'
 }
 
 repositories {
-    // Use jcenter for resolving dependencies.
     // You can declare any Maven/Ivy/file repository here.
-    jcenter()
+    mavenCentral()
 }
 
 dependencies {
-    // This dependency is exported to consumers, that is to say found on their compile classpath.
-    api 'org.apache.commons:commons-math3:3.6.1'
-
-    // This dependency is used internally, and not exposed to consumers on their own compile classpath.
-    implementation 'com.google.guava:guava:29.0-jre'
-
     // Use JUnit test framework
     testImplementation 'junit:junit:4.13'
+}
+
+ext {
+    javaHome = System.getenv('JAVA_HOME')
+    javaHomeInclude = javaHome + '/include'
+    if (System.properties['os.name'].toLowerCase().contains('linux')) {
+        javaHomeIncludeOs = javaHomeInclude + '/linux'
+    } else {
+        javaHomeIncludeOs = javaHomeInclude + '/win32'
+    }
+}
+
+compileJava {
+    options.compilerArgs += ['-h', file('src/main/c/headers/')]
+}
+
+test {
+    systemProperty "java.library.path", file("${buildDir}/libs/jmtp/shared/debug").absolutePath
+    dependsOn 'jmtpDebugSharedLibrary'
+}
+
+model {
+    toolChains {
+        gcc(Gcc) {
+            eachPlatform {
+                cCompiler.withArguments { args ->
+                    args << "-std=c11"
+                    args << "-g"
+                }
+            }
+        }
+    }
+    repositories {
+        libs(PrebuiltLibraries) {
+            mtp {
+                headers.srcDir '/usr/include'
+            }
+
+            def libDir = '/usr/lib/x86_64-linux-gnu/'
+
+            mtplib {
+                binaries.withType(SharedLibraryBinary) {
+                    sharedLibraryFile = file(libDir + 'libmtp.so')
+                }
+            }
+        }
+    }
+    components {
+        jmtp(NativeLibrarySpec) {
+            sources {
+                c {
+                    source {
+                        srcDir 'src/main/c/src'
+                        include '*.c'
+                    }
+                    exportedHeaders {
+                        srcDirs 'src/main/c/headers', '/usr/include', '/usr/local/include', javaHomeInclude, javaHomeIncludeOs
+                    }
+
+                    lib library: 'mtp', linkage: 'api'
+                    lib library: 'mtplib'
+                }
+
+            }
+            buildTypes {
+                debug
+                release
+            }
+        }
+    }
 }

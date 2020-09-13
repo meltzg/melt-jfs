@@ -31,6 +31,8 @@ ext {
     } else {
         javaHomeIncludeOs = javaHomeInclude + "/win32"
     }
+
+    println javaHome
 }
 
 compileJava {

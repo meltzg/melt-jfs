@@ -16,6 +16,7 @@ public class Library {
     private int foo;
 
     public int someLibraryMethod() {
-        return foo() * foo;
+        var cFoo = foo();
+        return cFoo * foo;
     }
 }

@@ -27,6 +27,7 @@ hs_err_pid*
 
 # Ignore Gradle build output directory
 build
+bin
 
 # Do not ignore the gradle wrapper
 !gradle/wrapper/gradle-wrapper.jar
@@ -34,6 +35,9 @@ build
 # Ignore IDE files
 .idea
 .vscode
+.classpath
+.project
+.settings
 
 # Ignore generated JNI headers
 src/main/c/headers/org_meltzg*

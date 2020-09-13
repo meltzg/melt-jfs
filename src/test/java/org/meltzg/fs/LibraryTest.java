@@ -10,6 +10,8 @@ public class LibraryTest {
     @Test public void testSomeLibraryMethod() {
         Library classUnderTest = new Library();
         classUnderTest.setFoo(4);
-        assertEquals("someLibraryMethod should return '16'", 16, classUnderTest.someLibraryMethod());
+        for (var i = 0; i < 3; i++) {
+            assertEquals("someLibraryMethod should return 'i'", i * classUnderTest.getFoo(), classUnderTest.someLibraryMethod());
+        }
     }
 }

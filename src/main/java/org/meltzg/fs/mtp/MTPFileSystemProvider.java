@@ -12,10 +12,6 @@ import java.util.Map;
 import java.util.Set;
 
 public class MTPFileSystemProvider extends FileSystemProvider {
-    static {
-        System.loadLibrary("jmtp");
-    }
-
     @Override
     public String getScheme() {
         return "mtp";

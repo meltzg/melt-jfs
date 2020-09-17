@@ -9,7 +9,7 @@ import static org.meltzg.fs.mtp.types.MTPDeviceMountProperties.*;
 
 @Value
 public class MTPDeviceInfo {
-    String deviceId;
+    MTPDeviceIdentifier deviceId;
     String friendlyName;
     String description;
     String manufacturer;
@@ -21,7 +21,7 @@ public class MTPDeviceInfo {
     public Map<String, String> toMap() {
         var map = new HashMap<String, String>();
 
-        map.put(DEVICE_ID.toString(), deviceId);
+        map.put(DEVICE_ID.toString(), deviceId.toString());
         map.put(FRIENDLY_NAME.toString(), friendlyName);
         map.put(DESCRIPTION.toString(), description);
         map.put(MANUFACTURER.toString(), manufacturer);

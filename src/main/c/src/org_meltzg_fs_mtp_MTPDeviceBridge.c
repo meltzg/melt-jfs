@@ -7,7 +7,7 @@ JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_initMTP(JNIEnv *en
     initMTP();
 }
 
-JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_terminateMTP(JNIEnv *env, jobject obj, jobject deviceConns) {
+JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_terminateMTP(JNIEnv *env, jobject obj, jobjectArray deviceConns) {
 }
 
 JNIEXPORT jlong JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getRawConnection(JNIEnv *env, jobject obj)

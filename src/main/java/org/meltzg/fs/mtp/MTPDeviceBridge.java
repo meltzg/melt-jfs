@@ -67,14 +67,14 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private void closeUnsafe() throws IOException {
-        terminateMTP(deviceConns.values());
+        terminateMTP(deviceConns.values().toArray(new MTPDeviceConnection[deviceConns.size()]));
         deviceInfo.clear();
         deviceConns.clear();
     }
 
     private static native void initMTP();
 
-    private native void terminateMTP(Collection<MTPDeviceConnection> deviceConn);
+    private native void terminateMTP(MTPDeviceConnection[] deviceConn);
 
     private native long getRawConnection();
 

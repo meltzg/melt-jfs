@@ -14,7 +14,7 @@ void arrayListAdd(JNIEnv *env, jobject list, jobject element)
     jboolean val = (*env)->CallBooleanMethod(env, list, arrayListAdd, element);
 }
 
-jobject toJMTPDeviceIdentifier(JNIEnv *env, jobject obj, MTPDeviceIdentifier_t deviceId)
+jobject toJMTPDeviceIdentifier(JNIEnv *env, MTPDeviceIdentifier_t deviceId)
 {
     jclass deviceIdentifierClass = (*env)->FindClass(env, JMTPDEVICEIDENTIFIER);
     char sig[1024];
@@ -25,21 +25,21 @@ jobject toJMTPDeviceIdentifier(JNIEnv *env, jobject obj, MTPDeviceIdentifier_t d
     jint productId = deviceId.productId;
     jstring serial = (*env)->NewStringUTF(env, deviceId.serial);
 
-    jobject jDeviceId = (*env)->NewObject(env, deviceIdentifierClass, deviceIdentifierConstr, obj, vendorId, productId, serial);
+    jobject jDeviceId = (*env)->NewObject(env, deviceIdentifierClass, deviceIdentifierConstr, vendorId, productId, serial);
     return jDeviceId;
 }
 
-jobject toJMTPDeviceConnection(JNIEnv *env, jobject obj, MTPDeviceConnection_t deviceConn)
+jobject toJMTPDeviceConnection(JNIEnv *env, MTPDeviceConnection_t deviceConn)
 {
     jclass deviceConnectionClass = (*env)->FindClass(env, JMTPDEVICECONNECTION);
     char sig[1024];
     sprintf(sig, "(%sJJ)V", JMTPDEVICEIDENTIFIER);
     jmethodID deviceConnectionConstr = (*env)->GetMethodID(env, deviceConnectionClass, JCONSTRUCTOR, sig);
 
-    jobject deviceId = toJMTPDeviceIdentifier(env, obj, deviceConn.deviceId);
+    jobject deviceId = toJMTPDeviceIdentifier(env, deviceConn.deviceId);
     jlong rawDevice = deviceConn.rawDevice;
     jlong device = deviceConn.device;
 
-    jobject jDeviceConn = (*env)->NewObject(env, deviceConnectionClass, deviceConnectionConstr, obj, deviceId, rawDevice, deviceConn);
+    jobject jDeviceConn = (*env)->NewObject(env, deviceConnectionClass, deviceConnectionConstr, deviceId, rawDevice, deviceConn);
     return jDeviceConn;
 }

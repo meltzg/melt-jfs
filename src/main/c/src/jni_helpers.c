@@ -29,6 +29,8 @@ jobject toJMTPDeviceIdentifier(JNIEnv *env, MTPDeviceIdentifier_t deviceId)
     return jDeviceId;
 }
 
+MTPDeviceIdentifier_t fromJMTPDeviceIdentifier(JNIEnv *env, jobject deviceId);
+
 jobject toJMTPDeviceConnection(JNIEnv *env, MTPDeviceConnection_t deviceConn)
 {
     jclass deviceConnectionClass = (*env)->FindClass(env, JMTPDEVICECONNECTION);
@@ -42,4 +44,25 @@ jobject toJMTPDeviceConnection(JNIEnv *env, MTPDeviceConnection_t deviceConn)
 
     jobject jDeviceConn = (*env)->NewObject(env, deviceConnectionClass, deviceConnectionConstr, deviceId, rawDevice, deviceConn);
     return jDeviceConn;
+}
+
+MTPDeviceConnection_t fromJMTPDeviceConnection(JNIEnv *env, jobject deviceConn);
+
+jobject toJMTPDeviceInfo(JNIEnv *env, MTPDeviceInfo_t deviceInfo)
+{
+    jclass deviceInfoClass = (*env)->FindClass(env, JMTPDEVICEINFO);
+    char sig[1024];
+    sprintf(sig, "(%s%s%s%sJJ)V", JMTPDEVICEIDENTIFIER, JSTRING, JSTRING, JSTRING);
+    jmethodID deviceInfoConstr = (*env)->GetMethodID(env, deviceInfoClass, JCONSTRUCTOR, sig);
+
+    jobject deviceId = toJMTPDeviceIdentifier(env, deviceInfo.deviceId);
+    jstring friendlyName = (*env)->NewStringUTF(env, deviceInfo.friendlyName);
+    jstring description = (*env)->NewStringUTF(env, deviceInfo.description);
+    jstring manufacturer = (*env)->NewStringUTF(env, deviceInfo.manufacturer);
+
+    jlong busLocation = deviceInfo.busLocation;
+    jlong devNum = deviceInfo.devNum;
+
+    jobject jDeviceInfo = (*env)->NewObject(env, deviceInfoClass, deviceInfoConstr, deviceId, friendlyName, description, manufacturer, busLocation, devNum);
+    return jDeviceInfo;
 }

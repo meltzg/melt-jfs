@@ -6,6 +6,7 @@
 
 typedef struct MTPDeviceIdentifier_struct MTPDeviceIdentifier_t;
 typedef struct MTPDeviceConnection_struct MTPDeviceConnection_t;
+typedef struct MTPDeviceInfo_struct MTPDeviceInfo_t;
 
 struct MTPDeviceIdentifier_struct {
     uint16_t vendorId;
@@ -19,9 +20,21 @@ struct MTPDeviceConnection_struct {
     LIBMTP_mtpdevice_t * device;
 };
 
+struct MTPDeviceInfo_struct {
+    MTPDeviceIdentifier_t deviceId;
+    char *friendlyName;
+    char *description;
+    char *manufacturer;
+
+    int64_t busLocation;
+    int64_t devNum;
+};
+
 void freeMTPDeviceIdentifier(MTPDeviceIdentifier_t deviceId);
 void freeMTPDeviceConnection(MTPDeviceConnection_t deviceConn);
+void freeMTPDeviceInfo(MTPDeviceInfo_t deviceInfo);
 
 void initMTP();
+void terminateMTP(MTPDeviceConnection_t deviceConns[], int numConns);
 
 #endif

@@ -13,7 +13,6 @@ public class MTPDeviceInfo {
     String friendlyName;
     String description;
     String manufacturer;
-    String serial;
 
     long busLocation;
     long devNum;
@@ -25,7 +24,6 @@ public class MTPDeviceInfo {
         map.put(FRIENDLY_NAME.toString(), friendlyName);
         map.put(DESCRIPTION.toString(), description);
         map.put(MANUFACTURER.toString(), manufacturer);
-        map.put(SERIAL.toString(), serial);
         map.put(BUS_LOCATION.toString(), Long.toString(busLocation));
         map.put(DEV_NUM.toString(), Long.toString(devNum));
 

@@ -8,7 +8,6 @@ public enum MTPDeviceMountProperties {
     FRIENDLY_NAME("friendlyName"),
     DESCRIPTION("description"),
     MANUFACTURER("manufacturer"),
-    SERIAL("serial"),
     DEV_NUM("devNum"),
     BUS_LOCATION("busLocation");
 

@@ -76,13 +76,9 @@ public enum MTPDeviceBridge implements Closeable {
 
     private native void terminateMTP(MTPDeviceConnection[] deviceConn);
 
-    private native long getRawConnection();
-
-    private native List<MTPDeviceConnection> getDeviceConnections() throws IOException;
+    private native MTPDeviceConnection[] getDeviceConnections() throws IOException;
 
     private native MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
-
-    private native void closeDevice(long rawDeviceConn, long deviceConn);
 
     static {
         System.loadLibrary("jmtp");

@@ -40,8 +40,8 @@ compileJava {
 }
 
 test {
-    systemProperty "java.library.path", file("${buildDir}/libs/jmtp/shared/debug").absolutePath
-    dependsOn "jmtpDebugSharedLibrary"
+    systemProperty "java.library.path", file("${buildDir}/libs/jmtp/shared").absolutePath
+    dependsOn "jmtpSharedLibrary"
 }
 
 model {
@@ -51,6 +51,8 @@ model {
                 cCompiler.withArguments { args ->
                     args << "-std=c11"
                     args << "-g"
+                    args << "-Wall"
+                    args << "-Werror"
                 }
             }
         }
@@ -86,10 +88,6 @@ model {
                     lib library: "mtplib"
                 }
 
-            }
-            buildTypes {
-                debug
-                release
             }
         }
     }

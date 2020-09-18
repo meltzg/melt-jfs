@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "mtp_helpers.h"
 
 void freeMTPDeviceIdentifier(MTPDeviceIdentifier_t deviceId)

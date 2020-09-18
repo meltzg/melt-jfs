@@ -22,11 +22,6 @@ JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_terminateMTP(JNIEn
     }
 }
 
-JNIEXPORT jlong JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getRawConnection(JNIEnv *env, jobject obj)
-{
-    return 0;
-}
-
 JNIEXPORT jobject JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getDeviceConnections(JNIEnv *env, jobject obj)
 {
     return NULL;
@@ -36,5 +31,3 @@ JNIEXPORT jobject JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getDeviceInfo(J
 {
     return NULL;
 }
-
-JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_closeDevice(JNIEnv *env, jobject obj, jlong rawDeviceConn, jlong deviceConn) {}

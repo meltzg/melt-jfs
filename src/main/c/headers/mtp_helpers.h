@@ -36,5 +36,6 @@ void freeMTPDeviceInfo(MTPDeviceInfo_t deviceInfo);
 
 void initMTP();
 void terminateMTP(MTPDeviceConnection_t deviceConns[], int numConns);
+MTPDeviceConnection_t *getDeviceConnections(size_t *numDevices);
 
 #endif

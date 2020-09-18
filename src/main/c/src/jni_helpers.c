@@ -17,20 +17,20 @@ jobject toJMTPDeviceIdentifier(JNIEnv *env, MTPDeviceIdentifier_t deviceId)
     return jDeviceId;
 }
 
-MTPDeviceIdentifier_t fromJMTPDeviceIdentifier(JNIEnv *env, jobject deviceId)
+MTPDeviceIdentifier_t *fromJMTPDeviceIdentifier(JNIEnv *env, jobject deviceId)
 {
-    MTPDeviceIdentifier_t cDeviceId;
+    MTPDeviceIdentifier_t *cDeviceId = (MTPDeviceIdentifier_t *) malloc(sizeof(MTPDeviceIdentifier_t));
 
     jclass deviceIdentifierClass = (*env)->FindClass(env, JMTPDEVICEIDENTIFIER);
     jfieldID vendorField = (*env)->GetFieldID(env, deviceIdentifierClass, "vendorId", "I");
     jfieldID productField = (*env)->GetFieldID(env, deviceIdentifierClass, "productId", "I");
     jfieldID serialField = (*env)->GetFieldID(env, deviceIdentifierClass, "serial", JSTRING);
 
-    cDeviceId.vendorId = (*env)->GetIntField(env, deviceId, vendorField);
-    cDeviceId.productId = (*env)->GetIntField(env, deviceId, productField);
+    cDeviceId->vendorId = (*env)->GetIntField(env, deviceId, vendorField);
+    cDeviceId->productId = (*env)->GetIntField(env, deviceId, productField);
     
     jstring jSerial = (*env)->GetObjectField(env, deviceId, serialField);
-    cDeviceId.serial = fromJString(env, jSerial);
+    cDeviceId->serial = fromJString(env, jSerial);
 
     return cDeviceId;
 }
@@ -42,7 +42,7 @@ jobject toJMTPDeviceConnection(JNIEnv *env, MTPDeviceConnection_t deviceConn)
     sprintf(sig, "(%sJJ)V", JMTPDEVICEIDENTIFIER);
     jmethodID deviceConnectionConstr = (*env)->GetMethodID(env, deviceConnectionClass, JCONSTRUCTOR, sig);
 
-    jobject deviceId = toJMTPDeviceIdentifier(env, deviceConn.deviceId);
+    jobject deviceId = toJMTPDeviceIdentifier(env, *(deviceConn.deviceId));
     jlong rawDevice = (jlong) deviceConn.rawDevice;
     jlong device = (jlong) deviceConn.device;
 
@@ -50,9 +50,9 @@ jobject toJMTPDeviceConnection(JNIEnv *env, MTPDeviceConnection_t deviceConn)
     return jDeviceConn;
 }
 
-MTPDeviceConnection_t fromJMTPDeviceConnection(JNIEnv *env, jobject deviceConn)
+MTPDeviceConnection_t *fromJMTPDeviceConnection(JNIEnv *env, jobject deviceConn)
 {
-    MTPDeviceConnection_t cDeviceConn;
+    MTPDeviceConnection_t *cDeviceConn = (MTPDeviceConnection_t *) malloc(sizeof(MTPDeviceConnection_t));
 
     jclass deviceConnectionClass = (*env)->FindClass(env, JMTPDEVICECONNECTION);
     jfieldID deviceIdField = (*env)->GetFieldID(env, deviceConnectionClass, "deviceId", JMTPDEVICEIDENTIFIER);
@@ -60,9 +60,9 @@ MTPDeviceConnection_t fromJMTPDeviceConnection(JNIEnv *env, jobject deviceConn)
     jfieldID deviceField = (*env)->GetFieldID(env, deviceConnectionClass, "deviceConn", "J");
 
     jobject deviceId = (*env)->GetObjectField(env, deviceConn, deviceIdField);
-    cDeviceConn.deviceId = fromJMTPDeviceIdentifier(env, deviceId);
-    cDeviceConn.rawDevice = (LIBMTP_raw_device_t *) (*env)->GetLongField(env, deviceConn, rawDeviceField);
-    cDeviceConn.device = (LIBMTP_mtpdevice_t *) (*env)->GetLongField(env, deviceConn, deviceField);
+    cDeviceConn->deviceId = fromJMTPDeviceIdentifier(env, deviceId);
+    cDeviceConn->rawDevice = (LIBMTP_raw_device_t *) (*env)->GetLongField(env, deviceConn, rawDeviceField);
+    cDeviceConn->device = (LIBMTP_mtpdevice_t *) (*env)->GetLongField(env, deviceConn, deviceField);
 
     return cDeviceConn;
 }
@@ -74,7 +74,7 @@ jobject toJMTPDeviceInfo(JNIEnv *env, MTPDeviceInfo_t deviceInfo)
     sprintf(sig, "(%s%s%s%sJJ)V", JMTPDEVICEIDENTIFIER, JSTRING, JSTRING, JSTRING);
     jmethodID deviceInfoConstr = (*env)->GetMethodID(env, deviceInfoClass, JCONSTRUCTOR, sig);
 
-    jobject deviceId = toJMTPDeviceIdentifier(env, deviceInfo.deviceId);
+    jobject deviceId = toJMTPDeviceIdentifier(env, *(deviceInfo.deviceId));
     jstring friendlyName = (*env)->NewStringUTF(env, deviceInfo.friendlyName);
     jstring description = (*env)->NewStringUTF(env, deviceInfo.description);
     jstring manufacturer = (*env)->NewStringUTF(env, deviceInfo.manufacturer);
@@ -89,7 +89,7 @@ jobject toJMTPDeviceInfo(JNIEnv *env, MTPDeviceInfo_t deviceInfo)
 char *fromJString(JNIEnv *env, jstring string)
 {
     const char * original = (*env)->GetStringUTFChars(env, string, NULL);
-    char *cStr = (char *) malloc(strlen(original) + 1);
+    char *cStr = (char *) malloc((strlen(original) + 1) * sizeof(char));
     strcpy(cStr, original);
     (*env)->ReleaseStringUTFChars(env, string, original);
     return cStr;

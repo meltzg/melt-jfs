@@ -12,9 +12,9 @@ static const char *const JMTPDEVICECONNECTION = "Lorg/meltzg/fs/mtp/types/MTPDev
 static const char *const JMTPDEVICEINFO = "Lorg/meltzg/fs/mtp/types/MTPDeviceInfo;";
 
 jobject toJMTPDeviceIdentifier(JNIEnv *env, MTPDeviceIdentifier_t deviceId);
-MTPDeviceIdentifier_t fromJMTPDeviceIdentifier(JNIEnv *env, jobject deviceId);
+MTPDeviceIdentifier_t *fromJMTPDeviceIdentifier(JNIEnv *env, jobject deviceId);
 jobject toJMTPDeviceConnection(JNIEnv *env, MTPDeviceConnection_t deviceConn);
-MTPDeviceConnection_t fromJMTPDeviceConnection(JNIEnv *env, jobject deviceConn);
+MTPDeviceConnection_t *fromJMTPDeviceConnection(JNIEnv *env, jobject deviceConn);
 jobject toJMTPDeviceInfo(JNIEnv *env, MTPDeviceInfo_t deviceInfo);
 
 char *fromJString(JNIEnv *env, jstring string);

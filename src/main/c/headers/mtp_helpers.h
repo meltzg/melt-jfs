@@ -15,13 +15,13 @@ struct MTPDeviceIdentifier_struct {
 };
 
 struct MTPDeviceConnection_struct {
-    MTPDeviceIdentifier_t deviceId;
+    MTPDeviceIdentifier_t *deviceId;
     LIBMTP_raw_device_t *rawDevice;
     LIBMTP_mtpdevice_t * device;
 };
 
 struct MTPDeviceInfo_struct {
-    MTPDeviceIdentifier_t deviceId;
+    MTPDeviceIdentifier_t *deviceId;
     char *friendlyName;
     char *description;
     char *manufacturer;
@@ -35,7 +35,7 @@ void freeMTPDeviceConnection(MTPDeviceConnection_t deviceConn);
 void freeMTPDeviceInfo(MTPDeviceInfo_t deviceInfo);
 
 void initMTP();
-void terminateMTP(MTPDeviceConnection_t deviceConns[], int numConns);
-MTPDeviceConnection_t *getDeviceConnections(size_t *numDevices);
+void terminateMTP(MTPDeviceConnection_t **deviceConns, int numConns);
+MTPDeviceConnection_t *getDeviceConnections(int *numDevices);
 
 #endif

@@ -29,7 +29,6 @@ private:
 
 public:
     MTPDeviceConnection(MTPDeviceIdentifier deviceId, LIBMTP_raw_device_t *rawDevice, LIBMTP_mtpdevice_t *device) : deviceId(deviceId), rawDevice(rawDevice), device(device) {}
-    ~MTPDeviceConnection();
 
     MTPDeviceIdentifier getDeviceId() { return deviceId; }
     LIBMTP_raw_device_t *getRawDevice() { return rawDevice; }
@@ -60,5 +59,6 @@ public:
 void initMTP();
 void terminateMTP(std::vector<MTPDeviceConnection> deviceConns);
 std::vector<MTPDeviceConnection> getDeviceConnections();
+MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
 
 #endif

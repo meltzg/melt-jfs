@@ -2,24 +2,24 @@ package org.meltzg.fs.mtp;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import org.meltzg.fs.mtp.types.MTPDeviceConnection;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 import org.meltzg.fs.mtp.types.MTPDeviceInfo;
 
+import lombok.Getter;
+
 public enum MTPDeviceBridge implements Closeable {
     INSTANCE;
 
     private ReentrantReadWriteLock connectionLock;
+    @Getter
     private Map<MTPDeviceIdentifier, MTPDeviceInfo> deviceInfo;
+    @Getter
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
 
     private MTPDeviceBridge() {
@@ -33,7 +33,7 @@ public enum MTPDeviceBridge implements Closeable {
             try {
                 INSTANCE.connectionLock.writeLock().lock();
                 if (INSTANCE.deviceConns.isEmpty()) {
-                    INSTANCE.refreshDeviceList();
+                    INSTANCE.refreshDeviceListUnsafe();
                 }
             } finally {
                 INSTANCE.connectionLock.writeLock().unlock();
@@ -53,16 +53,12 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
-    public void refreshDeviceList() throws IOException {
-        try {
-            connectionLock.writeLock().lock();
-            closeUnsafe();
-            for (var conn : getDeviceConnections()) {
-                deviceConns.put(conn.getDeviceId(), conn);
-                deviceInfo.put(conn.getDeviceId(), getDeviceInfo(conn));
-            }
-        } finally {
-            connectionLock.writeLock().unlock();
+    private void refreshDeviceListUnsafe() throws IOException {
+        connectionLock.writeLock().lock();
+        closeUnsafe();
+        for (var conn : getDeviceConnections()) {
+            deviceConns.put(conn.getDeviceId(), conn);
+            deviceInfo.put(conn.getDeviceId(), getDeviceInfo(conn));
         }
     }
 

@@ -4,23 +4,18 @@
 using std::string;
 using std::vector;
 
-MTPDeviceConnection::~MTPDeviceConnection()
-{
-    LIBMTP_Release_Device(device);
-}
-
 void initMTP()
 {
     LIBMTP_Init();
 }
 
-void terminateMTP(vector<MTPDeviceConnection> deviceConns, int numConns)
+void terminateMTP(vector<MTPDeviceConnection> deviceConns)
 {
-    if (numConns <= 0)
+    if (deviceConns.empty())
     {
         return;
     }
-    for (int i = 0; i < numConns; i++)
+    for (int i = 0; i < deviceConns.size(); i++)
     {
         LIBMTP_Release_Device(deviceConns[i].getDevice());
     }
@@ -40,8 +35,35 @@ vector<MTPDeviceConnection> getDeviceConnections()
         for (int i = 0; i < numDevices; i++)
         {
             LIBMTP_mtpdevice_t *device = LIBMTP_Open_Raw_Device_Uncached(&rawDevices[i]);
+
+            char *serial = LIBMTP_Get_Serialnumber(device);
+
+            MTPDeviceIdentifier deviceId = MTPDeviceIdentifier(rawDevices[i].device_entry.vendor_id, rawDevices[i].device_entry.product_id, serial);
+            MTPDeviceConnection deviceConn = MTPDeviceConnection(deviceId, &rawDevices[i], device);
+            deviceConns.push_back(deviceConn);
+            free(serial);
         }
     }
 
     return deviceConns;
+}
+
+MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn)
+{
+    LIBMTP_mtpdevice_t *device = deviceConn.getDevice();
+
+    char *friendly = LIBMTP_Get_Friendlyname(deviceConn.getDevice());
+    char *description = LIBMTP_Get_Modelname(deviceConn.getDevice());
+    char *manufacturer = LIBMTP_Get_Manufacturername(deviceConn.getDevice());
+
+    string safeFriend = friendly == nullptr ? "" : friendly;
+    string safeDesc = description == nullptr ? "" : description;
+    string safeManu = manufacturer == nullptr ? "" : manufacturer;
+
+    MTPDeviceInfo deviceInfo = MTPDeviceInfo(deviceConn.getDeviceId(), safeFriend, safeDesc, safeManu, deviceConn.getRawDevice()->bus_location, deviceConn.getRawDevice()->devnum);
+    free(friendly);
+    free(description);
+    free(manufacturer);
+
+    return deviceInfo;
 }

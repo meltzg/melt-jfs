@@ -3,6 +3,8 @@
 #include "jni_helpers.h"
 #include "mtp_helpers.h"
 
+using std::vector;
+
 JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_initMTP(JNIEnv *env, jclass obj)
 {
     initMTP();
@@ -10,20 +12,16 @@ JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_initMTP(JNIEnv *en
 
 JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_terminateMTP(JNIEnv *env, jobject obj, jobjectArray deviceConns)
 {
-    jsize numConns = (*env)->GetArrayLength(env, deviceConns);
-    MTPDeviceConnection_t **cDeviceConns = (MTPDeviceConnection_t **) malloc(numConns * sizeof(MTPDeviceConnection_t *));
+    jsize numConns = env->GetArrayLength(deviceConns);
+    vector<MTPDeviceConnection> cDeviceConns;
     for (int i = 0; i < numConns; i++)
     {
-        cDeviceConns[i] = fromJMTPDeviceConnection(env, (*env)->GetObjectArrayElement(env, deviceConns, i));
+        cDeviceConns.push_back(fromJMTPDeviceConnection(env, env->GetObjectArrayElement(deviceConns, i)));
     }
-    terminateMTP(cDeviceConns, numConns);
-    for (int i = 0; i < numConns; i++)
-    {
-        freeMTPDeviceConnection(*(cDeviceConns[i]));
-    }
+    terminateMTP(cDeviceConns);
 }
 
-JNIEXPORT jobject JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getDeviceConnections(JNIEnv *env, jobject obj)
+JNIEXPORT jobjectArray JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getDeviceConnections(JNIEnv *env, jobject obj)
 {
     return NULL;
 }

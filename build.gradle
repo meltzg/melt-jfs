@@ -9,7 +9,7 @@
 plugins {
     // Apply the java-library plugin to add support for Java Library
     id "java-library"
-    id "c"
+    id "cpp"
     id "io.freefair.lombok" version "5.2.1"
 }
 
@@ -36,7 +36,7 @@ ext {
 }
 
 compileJava {
-    options.compilerArgs += ["-h", file("src/main/c/headers/")]
+    options.compilerArgs += ["-h", file("src/main/cpp/headers/")]
 }
 
 test {
@@ -49,7 +49,7 @@ model {
         gcc(Gcc) {
             eachPlatform {
                 cCompiler.withArguments { args ->
-                    args << "-std=c11"
+                    args << "-std=c++11"
                     args << "-g"
                     args << "-Wall"
                     args << "-Werror"
@@ -75,13 +75,13 @@ model {
     components {
         jmtp(NativeLibrarySpec) {
             sources {
-                c {
+                cpp {
                     source {
-                        srcDir "src/main/c/src"
-                        include "*.c"
+                        srcDir "src/main/cpp/src"
+                        include "*.cpp"
                     }
                     exportedHeaders {
-                        srcDirs "src/main/c/headers", "/usr/include", "/usr/local/include", javaHomeInclude, javaHomeIncludeOs
+                        srcDirs "src/main/cpp/headers", "/usr/include", "/usr/local/include", javaHomeInclude, javaHomeIncludeOs
                     }
 
                     lib library: "mtp", linkage: "api"

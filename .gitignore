@@ -40,7 +40,7 @@ bin
 .settings
 
 # Ignore generated JNI headers
-src/main/c/headers/org_meltzg*
+src/main/cpp/headers/org_meltzg*
 
 # Ignore generated lombok config
 /lombok.config

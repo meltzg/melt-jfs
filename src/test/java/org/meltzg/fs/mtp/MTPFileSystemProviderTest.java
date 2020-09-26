@@ -27,46 +27,46 @@ public class MTPFileSystemProviderTest {
         provider = new MTPFileSystemProvider();
     }
 
-//    @Test
-//    public void newFileSystem() throws URISyntaxException, IOException {
-//        assertNotNull(provider.newFileSystem(new URI(String.format("mtp:%s!/", deviceIdentifier.toString())), null));
-//    }
-//
-//    @Test(expected = FileSystemAlreadyExistsException.class)
-//    public void newFileSystemDuplicate() throws URISyntaxException, IOException {
-//        var uri = new URI(String.format("mtp:%s!/", deviceIdentifier.toString()));
-//        provider.newFileSystem(uri, null);
-//        provider.newFileSystem(uri, null);
-//    }
-//
-//    @Test
-//    public void getFileSystem() throws URISyntaxException, IOException {
-//        var uri = new URI(String.format("mtp:%s!/", deviceIdentifier.toString()));
-//        var fs = provider.newFileSystem(uri, null);
-//        var retrievedFs = provider.getFileSystem(uri);
-//        assertEquals(fs, retrievedFs);
-//    }
-//
-//    @Test(expected = FileSystemNotFoundException.class)
-//    public void getFileSystemNotFound() throws URISyntaxException, IOException {
-//        var uri = new URI(String.format("mtp:%s!/", deviceIdentifier.toString()));
-//        provider.getFileSystem(uri);
-//    }
-//
-//    @Test
-//    public void getFileSystemCreated() throws URISyntaxException, IOException {
-//        var uri = new URI(String.format("mtp:%s!/", deviceIdentifier.toString()));
-//        assertNotNull(provider.getFileSystem(uri, true));
-//    }
-//
-//    @Test
-//    public void getPath() throws UnsupportedEncodingException, URISyntaxException {
-//        var strPath = "Internal Storage";
-//        var uri = getURI(strPath);
-//        var path = Paths.get(uri);
-//        assertEquals(String.format("/%s", strPath), path.toString());
-//        assertEquals(uri, path.toUri());
-//    }
+    @Test
+    public void newFileSystem() throws URISyntaxException, IOException {
+        assertNotNull(provider.newFileSystem(new URI(String.format("mtp://%s/", deviceIdentifier.toString())), null));
+    }
+
+    @Test(expected = FileSystemAlreadyExistsException.class)
+    public void newFileSystemDuplicate() throws URISyntaxException, IOException {
+        var uri = new URI(String.format("mtp://%s/", deviceIdentifier.toString()));
+        provider.newFileSystem(uri, null);
+        provider.newFileSystem(uri, null);
+    }
+
+    @Test
+    public void getFileSystem() throws URISyntaxException, IOException {
+        var uri = new URI(String.format("mtp://%s/", deviceIdentifier.toString()));
+        var fs = provider.newFileSystem(uri, null);
+        var retrievedFs = provider.getFileSystem(uri);
+        assertEquals(fs, retrievedFs);
+    }
+
+    @Test(expected = FileSystemNotFoundException.class)
+    public void getFileSystemNotFound() throws URISyntaxException, IOException {
+        var uri = new URI(String.format("mtp://%s/", deviceIdentifier.toString()));
+        provider.getFileSystem(uri);
+    }
+
+    @Test
+    public void getFileSystemCreated() throws URISyntaxException, IOException {
+        var uri = new URI(String.format("mtp://%s/", deviceIdentifier.toString()));
+        assertNotNull(provider.getFileSystem(uri, true));
+    }
+
+    @Test
+    public void getPath() throws UnsupportedEncodingException, URISyntaxException {
+        var strPath = "Internal Storage";
+        var uri = getURI(strPath);
+        var path = Paths.get(uri);
+        assertEquals(String.format("/%s", strPath), path.toString());
+        assertEquals(uri, path.toUri());
+    }
 
 //    @Test
 //    public void getFileStore() throws URISyntaxException, IOException {

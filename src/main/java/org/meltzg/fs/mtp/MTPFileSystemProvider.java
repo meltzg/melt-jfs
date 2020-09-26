@@ -10,29 +10,66 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.spi.FileSystemProvider;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 public class MTPFileSystemProvider extends FileSystemProvider {
+    final Map<MTPDeviceIdentifier, MTPFileSystem> fileSystems = new HashMap<>();
+
     @Override
     public String getScheme() {
         return "mtp";
     }
 
     @Override
-    public FileSystem newFileSystem(URI uri, Map<String, ?> env) throws IOException {
-        return null;
+    public MTPFileSystem newFileSystem(URI uri, Map<String, ?> env) throws IOException {
+        validateURI(uri);
+        synchronized (fileSystems) {
+            var deviceIdentifier = getDeviceIdentifier(uri);
+            var fileSystem = fileSystems.get(deviceIdentifier);
+            if (fileSystem != null) {
+                throw new FileSystemAlreadyExistsException(deviceIdentifier.toString());
+            }
+            fileSystem = new MTPFileSystem(this, deviceIdentifier, env);
+            fileSystems.put(deviceIdentifier, fileSystem);
+            return fileSystem;
+        }
     }
 
     @Override
-    public FileSystem getFileSystem(URI uri) {
-        return null;
+    public MTPFileSystem getFileSystem(URI uri) {
+        return getFileSystem(uri, false);
+    }
+
+    public MTPFileSystem getFileSystem(URI uri, boolean create) {
+        validateURI(uri);
+        synchronized (fileSystems) {
+            var deviceIdentifier = getDeviceIdentifier(uri);
+            var fileSystem = fileSystems.get(deviceIdentifier);
+            if (fileSystem == null) {
+                if (create) {
+                    try {
+                        fileSystem = newFileSystem(uri, null);
+                    } catch (IOException e) {
+                        throw (FileSystemNotFoundException) new FileSystemNotFoundException().initCause(e);
+                    }
+                } else {
+                    throw new FileSystemNotFoundException(deviceIdentifier.toString());
+                }
+            }
+            return fileSystem;
+        }
     }
 
     @Override
     public Path getPath(URI uri) {
-        return null;
+        validateURI(uri);
+        var deviceId = getDeviceIdentifier(uri);
+        var schemaSpecificPart = uri.getSchemeSpecificPart();
+        var pathPart = schemaSpecificPart.substring(schemaSpecificPart.indexOf(deviceId.toString()) + deviceId.toString().length());
+        return getFileSystem(uri, true).getPath(pathPart);
     }
 
     @Override
@@ -105,14 +142,18 @@ public class MTPFileSystemProvider extends FileSystemProvider {
 
     }
 
-    void validateURI(URI uri) throws IOException {
+    void validateURI(URI uri) {
         var scheme = uri.getScheme();
         if (scheme == null || !scheme.equalsIgnoreCase(getScheme())) {
             throw new IllegalArgumentException(String.format("URI scheme is not %s", getScheme()));
         }
         var deviceIdentifier = getDeviceIdentifier(uri);
-        if (!MTPDeviceBridge.getInstance().getDeviceConns().containsKey(deviceIdentifier)) {
-            throw new FileSystemNotFoundException(String.format("Device %s could not be found", deviceIdentifier.toString()));
+        try {
+            if (!MTPDeviceBridge.getInstance().getDeviceConns().containsKey(deviceIdentifier)) {
+                throw new FileSystemNotFoundException(String.format("Device %s could not be found", deviceIdentifier.toString()));
+            }
+        } catch (IOException e) {
+            throw new FileSystemNotFoundException(e.getMessage());
         }
     }
 

@@ -118,7 +118,7 @@ public class MTPFileSystemProvider extends FileSystemProvider {
 
     private MTPDeviceIdentifier getDeviceIdentifier(URI uri) {
         var schemeSpecificPart = uri.getSchemeSpecificPart();
-        var deviceIdPattern = Pattern.compile("(?<=//)\\d+:\\d+:\\w+(?=(/|$))");
+        var deviceIdPattern = Pattern.compile(String.format("(?<=//)%s(?=(/|$))", MTPDeviceIdentifier.deviceIdStrPattern));
         var deviceIdMatcher = deviceIdPattern.matcher(schemeSpecificPart);
         if (!deviceIdMatcher.find()) {
             throw new IllegalArgumentException(String.format("Invalid device schema %s", schemeSpecificPart));

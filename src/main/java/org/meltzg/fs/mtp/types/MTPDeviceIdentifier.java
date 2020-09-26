@@ -4,6 +4,8 @@ import lombok.Value;
 
 @Value
 public class MTPDeviceIdentifier {
+    public static final String deviceIdStrPattern = "\\d+:\\d+:\\w+";
+
     int vendorId;
     int productId;
     String serial;

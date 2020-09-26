@@ -1,5 +1,7 @@
 package org.meltzg.fs.mtp;
 
+import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
+
 import java.io.IOException;
 import java.net.URI;
 import java.nio.channels.SeekableByteChannel;
@@ -10,6 +12,7 @@ import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public class MTPFileSystemProvider extends FileSystemProvider {
     @Override
@@ -100,5 +103,33 @@ public class MTPFileSystemProvider extends FileSystemProvider {
     @Override
     public void setAttribute(Path path, String attribute, Object value, LinkOption... options) throws IOException {
 
+    }
+
+    void validateURI(URI uri) throws IOException {
+        var scheme = uri.getScheme();
+        if (scheme == null || !scheme.equalsIgnoreCase(getScheme())) {
+            throw new IllegalArgumentException(String.format("URI scheme is not %s", getScheme()));
+        }
+        var deviceIdentifier = getDeviceIdentifier(uri);
+        if (!MTPDeviceBridge.getInstance().getDeviceConns().containsKey(deviceIdentifier)) {
+            throw new FileSystemNotFoundException(String.format("Device %s could not be found", deviceIdentifier.toString()));
+        }
+    }
+
+    private MTPDeviceIdentifier getDeviceIdentifier(URI uri) {
+        var schemeSpecificPart = uri.getSchemeSpecificPart();
+        var deviceIdPattern = Pattern.compile("(?<=//)\\d+:\\d+:\\w+(?=(/|$))");
+        var deviceIdMatcher = deviceIdPattern.matcher(schemeSpecificPart);
+        if (!deviceIdMatcher.find()) {
+            throw new IllegalArgumentException(String.format("Invalid device schema %s", schemeSpecificPart));
+        }
+        var deviceIdStr = deviceIdMatcher.group();
+        return MTPDeviceIdentifier.fromString(deviceIdStr);
+    }
+
+    void validatePathProvider(Path path) {
+        if (!(path instanceof MTPPath)) {
+            throw new ProviderMismatchException();
+        }
     }
 }

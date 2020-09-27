@@ -68,13 +68,20 @@ public class MTPFileSystemProviderTest {
         assertEquals(uri, path.toUri());
     }
 
-//    @Test
-//    public void getFileStore() throws URISyntaxException, IOException {
-//        var uri = getURI("Internal storage");
-//        var path = Paths.get(uri);
-//        var fileStore = Files.getFileStore(path);
-//        assertEquals("0x10001", fileStore.name());
-//    }
+    @Test
+    public void getFileStore() throws URISyntaxException, IOException {
+        var uri = getURI("Internal storage");
+        var path = Paths.get(uri);
+        var fileStore = Files.getFileStore(path);
+        assertEquals("Internal storage", fileStore.name());
+    }
+
+    @Test(expected = IOException.class)
+    public void getFileStoreNotFound() throws URISyntaxException, IOException {
+        var uri = getURI("asdf");
+        var path = Paths.get(uri);
+        Files.getFileStore(path);
+    }
 
 //    @Test
 //    public void readFile() throws IOException, URISyntaxException, InterruptedException {

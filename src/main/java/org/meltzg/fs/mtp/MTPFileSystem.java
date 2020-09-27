@@ -73,7 +73,7 @@ public class MTPFileSystem extends FileSystem {
             }
         }
         var path = stringBuilder.toString();
-        return new MTPPath(this, path.getBytes(StandardCharsets.UTF_8));
+        return new MTPPath(this, path);
     }
 
     @Override

@@ -1,14 +1,20 @@
 package org.meltzg.fs.mtp;
 
+import lombok.AllArgsConstructor;
+
 import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
 
+@AllArgsConstructor
 public class MTPFileStore extends FileStore {
+    private final String name;
+    private final long storageId;
+
     @Override
     public String name() {
-        return null;
+        return name;
     }
 
     @Override

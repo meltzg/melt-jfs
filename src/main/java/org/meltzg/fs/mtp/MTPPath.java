@@ -9,20 +9,22 @@ import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.util.Arrays;
 
 @RequiredArgsConstructor
 public class MTPPath implements Path {
     private final MTPFileSystem fileSystem;
-    private final byte[] path;
+    private final String path;
+    private String[] parts;
 
     @Override
-    public FileSystem getFileSystem() {
+    public MTPFileSystem getFileSystem() {
         return fileSystem;
     }
 
     @Override
     public boolean isAbsolute() {
-        return (path.length > 0) && (path[0] == '/');
+        return (path.length() > 0) && (path.charAt(0) == '/');
     }
 
     @Override
@@ -42,17 +44,35 @@ public class MTPPath implements Path {
 
     @Override
     public int getNameCount() {
-        return 0;
+        initParts();
+        return parts.length;
     }
 
     @Override
     public Path getName(int index) {
-        return null;
+        return subpath(0, index + 1);
     }
 
     @Override
     public Path subpath(int beginIndex, int endIndex) {
-        return null;
+        initParts();
+        if (beginIndex < 0 || beginIndex >= parts.length) {
+            throw new IllegalArgumentException();
+        }
+        if (endIndex < 0 || endIndex >= parts.length) {
+            throw new IllegalArgumentException();
+        }
+        if (beginIndex >= endIndex) {
+            throw new IllegalArgumentException();
+        }
+
+        var pathBuilder = new StringBuilder();
+        for (int i = beginIndex; i < endIndex; i++) {
+            pathBuilder.append(parts[i]);
+            pathBuilder.append("/");
+        }
+
+        return new MTPPath(fileSystem, pathBuilder.toString());
     }
 
     @Override
@@ -95,9 +115,7 @@ public class MTPPath implements Path {
         if (isAbsolute()) {
             return this;
         }
-        var absoluteBytes = new byte[path.length + 1];
-        System.arraycopy(path, 0, absoluteBytes, 1, path.length);
-        return new MTPPath(fileSystem, absoluteBytes);
+        return new MTPPath(fileSystem, String.format("/%s", path));
     }
 
     @Override
@@ -128,6 +146,12 @@ public class MTPPath implements Path {
             return URLDecoder.decode(new String(path), StandardCharsets.UTF_8.toString());
         } catch (UnsupportedEncodingException e) {
             return new String(path);
+        }
+    }
+
+    private void initParts() {
+        if (parts == null) {
+            parts = Arrays.stream(path.split("/")).filter(part -> !part.isEmpty()).toArray(String[]::new);
         }
     }
 }

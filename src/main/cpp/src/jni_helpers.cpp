@@ -1,4 +1,5 @@
 #include <cstring>
+#include <iostream>
 #include "jni_helpers.h"
 
 jobject toJMTPDeviceIdentifier(JNIEnv *env, MTPDeviceIdentifier deviceId)
@@ -83,4 +84,24 @@ jobject toJMTPDeviceInfo(JNIEnv *env, MTPDeviceInfo deviceInfo)
 
     jobject jDeviceInfo = env->NewObject(deviceInfoClass, deviceInfoConstr, deviceId, friendlyName, description, manufacturer, busLocation, devNum);
     return jDeviceInfo;
+}
+
+jobject toJMTPFileStore(JNIEnv *env, MTPDeviceStorage deviceStorage)
+{
+    jclass deviceStorageClass = env->FindClass(JMTPDEVICESTORAGE);
+    char sig[1024];
+    sprintf(sig, "(%sJ)V", JSTRING);
+    jmethodID deviceStorageConstr = env->GetMethodID(deviceStorageClass, JCONSTRUCTOR, sig);
+    
+    jstring name = env->NewStringUTF(deviceStorage.getName().c_str());
+    jlong storageId = deviceStorage.getStorageId();
+
+    jobject jFileStore = env->NewObject(deviceStorageClass, deviceStorageConstr, name, storageId);
+    return jFileStore;
+}
+
+jint throwIOException(JNIEnv *env, const char *message)
+{
+    jclass ioexception_class = env->FindClass(JIOEXCEPTION);
+    return env->ThrowNew(ioexception_class, message);
 }

@@ -114,7 +114,8 @@ public class MTPFileSystemProvider extends FileSystemProvider {
 
     @Override
     public FileStore getFileStore(Path path) throws IOException {
-        return null;
+        validateURI(path.toUri());
+        return MTPDeviceBridge.getInstance().getFileStore(((MTPPath) path).getFileSystem().getDeviceIdentifier(), path.toString());
     }
 
     @Override
@@ -166,11 +167,5 @@ public class MTPFileSystemProvider extends FileSystemProvider {
         }
         var deviceIdStr = deviceIdMatcher.group();
         return MTPDeviceIdentifier.fromString(deviceIdStr);
-    }
-
-    void validatePathProvider(Path path) {
-        if (!(path instanceof MTPPath)) {
-            throw new ProviderMismatchException();
-        }
     }
 }

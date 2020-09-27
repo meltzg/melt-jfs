@@ -1,4 +1,5 @@
 #include <string>
+#include <cstring>
 #include "mtp_helpers.h"
 
 using std::string;
@@ -66,4 +67,16 @@ MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn)
     free(manufacturer);
 
     return deviceInfo;
+}
+
+MTPDeviceStorage getDeviceStorage(MTPDeviceConnection deviceConn, const char *storageName)
+{
+    for (LIBMTP_devicestorage_t *storage = deviceConn.getDevice()->storage; storage != 0; storage = storage->next)
+    {
+        if (strcmp(storage->StorageDescription, storageName) == 0)
+        {
+            return MTPDeviceStorage(deviceConn.getDeviceId(), storageName, storage->id);
+        }
+    }
+    return MTPDeviceStorage(deviceConn.getDeviceId(), "", 0);
 }

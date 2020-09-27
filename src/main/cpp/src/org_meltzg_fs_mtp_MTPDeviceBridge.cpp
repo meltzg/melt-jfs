@@ -2,6 +2,7 @@
 #include "jni_helpers.h"
 #include "mtp_helpers.h"
 
+using std::string;
 using std::vector;
 
 JNIEXPORT void JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_initMTP(JNIEnv *env, jclass obj)
@@ -38,4 +39,19 @@ JNIEXPORT jobject JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getDeviceInfo(J
     MTPDeviceInfo deviceInfo = getDeviceInfo(cDeviceConn);
     jobject jDeviceInfo = toJMTPDeviceInfo(env, deviceInfo);
     return jDeviceInfo;
+}
+
+JNIEXPORT jobject JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getFileStore(JNIEnv *env, jobject obj, jobject deviceConn, jstring storageName)
+{
+    MTPDeviceConnection cDeviceConn = fromJMTPDeviceConnection(env, deviceConn);
+    const char *cStorageName = env->GetStringUTFChars(storageName, nullptr);
+    MTPDeviceStorage deviceStorage = getDeviceStorage(cDeviceConn, cStorageName);
+    if (deviceStorage.getName().length() == 0)
+    {
+        throwIOException(env, "Could not find storage device ");
+    }
+
+    jobject jDeviceStorage = toJMTPFileStore(env, deviceStorage);
+    env->ReleaseStringUTFChars(storageName, cStorageName);
+    return jDeviceStorage;
 }

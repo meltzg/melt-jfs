@@ -56,9 +56,26 @@ public:
     int64_t getDevNum() { return devNum; }
 };
 
-void initMTP();
+class MTPDeviceStorage
+{
+private:
+    MTPDeviceIdentifier deviceId;
+    std::string name;
+    uint32_t storageId;
+
+public:
+    MTPDeviceStorage(MTPDeviceIdentifier deviceId, std::string name, uint32_t storageId) : deviceId(deviceId), name(name), storageId(storageId) {}
+
+    MTPDeviceIdentifier getDeviceId() { return deviceId; }
+    std::string getName() { return name; }
+    uint32_t getStorageId() { return storageId; }
+};
+
+void
+initMTP();
 void terminateMTP(std::vector<MTPDeviceConnection> deviceConns);
 std::vector<MTPDeviceConnection> getDeviceConnections();
 MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
+MTPDeviceStorage getDeviceStorage(MTPDeviceConnection deviceConn, const char *storageName);
 
 #endif

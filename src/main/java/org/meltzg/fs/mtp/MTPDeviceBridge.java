@@ -43,6 +43,21 @@ public enum MTPDeviceBridge implements Closeable {
         return INSTANCE;
     }
 
+    public MTPFileStore getFileStore(MTPDeviceIdentifier deviceId, String path) {
+        connectionLock.readLock().lock();
+        try {
+            var parts = path.replaceFirst("^/", "").split("/");
+            if (parts.length == 0) {
+                throw new IllegalArgumentException("First path part required");
+            }
+            synchronized (deviceConns.get(deviceId)) {
+                return getFileStore(deviceConns.get(deviceId), parts[0]);
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
     @Override
     public void close() throws IOException {
         try {
@@ -75,6 +90,8 @@ public enum MTPDeviceBridge implements Closeable {
     private native MTPDeviceConnection[] getDeviceConnections() throws IOException;
 
     private native MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
+
+    private native MTPFileStore getFileStore(MTPDeviceConnection deviceConn, String storageName);
 
     static {
         System.loadLibrary("jmtp");

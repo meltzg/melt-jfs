@@ -80,3 +80,27 @@ MTPDeviceStorage getDeviceStorage(MTPDeviceConnection deviceConn, const char *st
     }
     return MTPDeviceStorage(deviceConn.getDeviceId(), "", 0);
 }
+
+int64_t getCapacity(MTPDeviceConnection deviceConn, uint32_t storageId)
+{
+    for (LIBMTP_devicestorage_t *storage = deviceConn.getDevice()->storage; storage != 0; storage = storage->next)
+    {
+        if (storage->id == storageId)
+        {
+            return storage->MaxCapacity;
+        }
+    }
+    return -1;
+}
+
+int64_t getFreeSpace(MTPDeviceConnection deviceConn, uint32_t storageId)
+{
+    for (LIBMTP_devicestorage_t *storage = deviceConn.getDevice()->storage; storage != 0; storage = storage->next)
+    {
+        if (storage->id == storageId)
+        {
+            return storage->FreeSpaceInBytes;
+        }
+    }
+    return -1;
+}

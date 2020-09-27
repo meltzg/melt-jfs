@@ -90,13 +90,14 @@ jobject toJMTPFileStore(JNIEnv *env, MTPDeviceStorage deviceStorage)
 {
     jclass deviceStorageClass = env->FindClass(JMTPDEVICESTORAGE);
     char sig[1024];
-    sprintf(sig, "(%sJ)V", JSTRING);
+    sprintf(sig, "(%s%sJ)V", JSTRING, JMTPDEVICEIDENTIFIER);
     jmethodID deviceStorageConstr = env->GetMethodID(deviceStorageClass, JCONSTRUCTOR, sig);
     
     jstring name = env->NewStringUTF(deviceStorage.getName().c_str());
+    jobject deviceId = toJMTPDeviceIdentifier(env, deviceStorage.getDeviceId());
     jlong storageId = deviceStorage.getStorageId();
 
-    jobject jFileStore = env->NewObject(deviceStorageClass, deviceStorageConstr, name, storageId);
+    jobject jFileStore = env->NewObject(deviceStorageClass, deviceStorageConstr, name, deviceId, storageId);
     return jFileStore;
 }
 

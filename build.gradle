@@ -21,6 +21,9 @@ repositories {
 dependencies {
     // Use JUnit test framework
     testImplementation "junit:junit:4.13"
+
+    // https://mvnrepository.com/artifact/commons-io/commons-io
+    testImplementation "commons-io:commons-io:2.6"
 }
 
 ext {

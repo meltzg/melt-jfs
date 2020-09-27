@@ -77,5 +77,7 @@ void terminateMTP(std::vector<MTPDeviceConnection> deviceConns);
 std::vector<MTPDeviceConnection> getDeviceConnections();
 MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
 MTPDeviceStorage getDeviceStorage(MTPDeviceConnection deviceConn, const char *storageName);
+int64_t getCapacity(MTPDeviceConnection deviceConn, uint32_t storageId);
+int64_t getFreeSpace(MTPDeviceConnection deviceConn, uint32_t storageId);
 
 #endif

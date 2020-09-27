@@ -58,6 +58,28 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
+    public long getCapacity(MTPDeviceIdentifier deviceId, long storageId) {
+        connectionLock.readLock().lock();
+        try {
+            synchronized (deviceConns.get(deviceId)) {
+                return getCapacity(deviceConns.get(deviceId), storageId);
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
+    public long getFreeSpace(MTPDeviceIdentifier deviceId, long storageId) {
+        connectionLock.readLock().lock();
+        try {
+            synchronized (deviceConns.get(deviceId)) {
+                return getFreeSpace(deviceConns.get(deviceId), storageId);
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
     @Override
     public void close() throws IOException {
         try {
@@ -92,6 +114,10 @@ public enum MTPDeviceBridge implements Closeable {
     private native MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
 
     private native MTPFileStore getFileStore(MTPDeviceConnection deviceConn, String storageName);
+
+    private native long getCapacity(MTPDeviceConnection deviceConn, long storageId);
+
+    private native long getFreeSpace(MTPDeviceConnection deviceConn, long storageId);
 
     static {
         System.loadLibrary("jmtp");

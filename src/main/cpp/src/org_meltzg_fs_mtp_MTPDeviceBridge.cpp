@@ -55,3 +55,25 @@ JNIEXPORT jobject JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getFileStore(JN
     env->ReleaseStringUTFChars(storageName, cStorageName);
     return jDeviceStorage;
 }
+
+JNIEXPORT jlong JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getCapacity(JNIEnv *env, jobject obj, jobject deviceConn, jlong storageId)
+{
+    MTPDeviceConnection cDeviceConn = fromJMTPDeviceConnection(env, deviceConn);
+    jlong capacity = getCapacity(cDeviceConn, storageId);
+    if (capacity < 0)
+    {
+        throwIOException(env, "Could not find filestore");
+    }
+    return capacity;
+}
+
+JNIEXPORT jlong JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getFreeSpace(JNIEnv *env, jobject obj, jobject deviceConn, jlong storageId)
+{
+    MTPDeviceConnection cDeviceConn = fromJMTPDeviceConnection(env, deviceConn);
+    jlong freespace = getFreeSpace(cDeviceConn, storageId);
+    if (freespace < 0)
+    {
+        throwIOException(env, "Could not find filestore");
+    }
+    return freespace;
+}

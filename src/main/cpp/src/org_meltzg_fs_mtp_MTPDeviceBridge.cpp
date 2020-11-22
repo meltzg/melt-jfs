@@ -77,3 +77,11 @@ JNIEXPORT jlong JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getFreeSpace(JNIE
     }
     return freespace;
 }
+
+JNIEXPORT jobjectArray JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getChildItems(JNIEnv *env, jobject obj, jobject deviceConn, jlong itemId)
+{
+}
+
+JNIEXPORT jbyteArray JNICALL Java_org_meltzg_fs_mtp_MTPDeviceBridge_getFileContent(JNIEnv *env, jobject obj, jobject deviceConn, jlong itemId)
+{
+}

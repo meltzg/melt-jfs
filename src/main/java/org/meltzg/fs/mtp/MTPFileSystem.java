@@ -43,7 +43,7 @@ public class MTPFileSystem extends FileSystem {
 
     @Override
     public String getSeparator() {
-        return null;
+        return "/";
     }
 
     @Override

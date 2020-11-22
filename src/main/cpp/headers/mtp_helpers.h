@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+const uint32_t MTP_ROOT = LIBMTP_FILES_AND_FOLDERS_ROOT;
+
 class MTPDeviceIdentifier
 {
 private:
@@ -71,13 +73,34 @@ public:
     uint32_t getStorageId() { return storageId; }
 };
 
-void
-initMTP();
+class MTPItemInfo
+{
+private:
+    uint32_t parentId;
+    uint32_t itemId;
+    uint32_t storageId;
+    bool isFile;
+    uint64_t filesize;
+    std::string filename;
+
+public:
+    MTPItemInfo(uint32_t parentId, uint32_t itemId, uint32_t storageId, bool isFile, uint64_t filesize, std::string filename) : parentId(parentId), itemId(itemId), storageId(storageId), isFile(isFile), filesize(filesize), filename(filename) {}
+
+    uint32_t getParentId() { return parentId; }
+    uint32_t getItemId() { return itemId; }
+    uint32_t getStorageId() { return storageId; }
+    bool getIsFile() { return isFile; }
+    uint64_t getFilesize() { return filesize; }
+    std::string getFilename() { return filename; }
+};
+
+void initMTP();
 void terminateMTP(std::vector<MTPDeviceConnection> deviceConns);
 std::vector<MTPDeviceConnection> getDeviceConnections();
 MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
 MTPDeviceStorage getDeviceStorage(MTPDeviceConnection deviceConn, const char *storageName);
 int64_t getCapacity(MTPDeviceConnection deviceConn, uint32_t storageId);
 int64_t getFreeSpace(MTPDeviceConnection deviceConn, uint32_t storageId);
+std::vector<MTPItemInfo> getChildItems(MTPDeviceConnection deviceConn, uint32_t parentId);
 
 #endif

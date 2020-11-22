@@ -1,6 +1,7 @@
 package org.meltzg.fs.mtp;
 
-import lombok.AllArgsConstructor;
+import lombok.EqualsAndHashCode;
+import lombok.Value;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 
 import java.io.IOException;
@@ -8,11 +9,12 @@ import java.nio.file.FileStore;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
 
-@AllArgsConstructor
+@EqualsAndHashCode(callSuper = true)
+@Value
 public class MTPFileStore extends FileStore {
-    private final String name;
-    private final MTPDeviceIdentifier deviceId;
-    private final long storageId;
+    String name;
+    MTPDeviceIdentifier deviceId;
+    long storageId;
 
     @Override
     public String name() {

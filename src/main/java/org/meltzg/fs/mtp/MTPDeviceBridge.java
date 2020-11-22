@@ -1,17 +1,18 @@
 package org.meltzg.fs.mtp;
 
 import java.io.Closeable;
+import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Predicate;
 
 import org.meltzg.fs.mtp.types.MTPDeviceConnection;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 import org.meltzg.fs.mtp.types.MTPDeviceInfo;
 
 import lombok.Getter;
+import org.meltzg.fs.mtp.types.MTPItemInfo;
 
 public enum MTPDeviceBridge implements Closeable {
     INSTANCE;
@@ -80,6 +81,34 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
+    public byte[] getFileContent(MTPDeviceIdentifier deviceId, String path) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var parts = path.replaceFirst("^/", "").split("/");
+            synchronized (deviceConns.get(deviceId)) {
+                var children = getChildItems(deviceConns.get(deviceId), -1);
+                Optional<MTPItemInfo> foundPart = Optional.empty();
+                for (var part : parts) {
+                    foundPart = Arrays.stream(children).filter(mtpItemInfo -> mtpItemInfo.getFilename().equals(part)).findFirst();
+                    if (foundPart.isEmpty()) {
+                        break;
+                    }
+                }
+                if (foundPart.isEmpty() || !foundPart.get().getFilename().equals(parts[parts.length - 1])) {
+                    throw new FileNotFoundException(String.format("%s not found", path));
+                }
+
+                if (!foundPart.get().isFile()) {
+                    throw new IOException(String.format("%s is not a file", path));
+                }
+
+                return getFileContent(deviceConns.get(deviceId), foundPart.get().getItemId());
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
     @Override
     public void close() throws IOException {
         try {
@@ -118,6 +147,10 @@ public enum MTPDeviceBridge implements Closeable {
     private native long getCapacity(MTPDeviceConnection deviceConn, long storageId);
 
     private native long getFreeSpace(MTPDeviceConnection deviceConn, long storageId);
+
+    private native MTPItemInfo[] getChildItems(MTPDeviceConnection deviceConn, long itemId);
+
+    private native byte[] getFileContent(MTPDeviceConnection deviceConn, long itemId);
 
     static {
         System.loadLibrary("jmtp");

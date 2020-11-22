@@ -104,3 +104,8 @@ int64_t getFreeSpace(MTPDeviceConnection deviceConn, uint32_t storageId)
     }
     return -1;
 }
+
+vector<MTPItemInfo> getChildItems(MTPDeviceConnection deviceConn, uint32_t parentId)
+{
+
+}

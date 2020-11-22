@@ -4,6 +4,7 @@ import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -11,6 +12,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -74,7 +76,63 @@ public class MTPFileSystemProvider extends FileSystemProvider {
 
     @Override
     public SeekableByteChannel newByteChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
-        return null;
+        validatePathProvider(path);
+        var deviceIdentifier = getDeviceIdentifier(path.toUri());
+        var isWrite = options.contains(StandardOpenOption.WRITE);
+
+        var bufferOptions = new HashSet<OpenOption>();
+        bufferOptions.add(StandardOpenOption.WRITE);
+        bufferOptions.add(StandardOpenOption.READ);
+        var surrogateChannel = Files.newByteChannel(Files.createTempFile("write-buffer-", ".tmp"), bufferOptions, attrs);
+        var content = MTPDeviceBridge.getInstance().getFileContent(deviceIdentifier, path.toAbsolutePath().toString());
+        if (content != null) {
+            surrogateChannel.write(ByteBuffer.allocate(content.length).put(content).position(0));
+            surrogateChannel.position(0);
+        }
+
+        return new SeekableByteChannel() {
+            long position;
+
+            @Override
+            public int read(ByteBuffer byteBuffer) throws IOException {
+                return 0;
+            }
+
+            @Override
+            public int write(ByteBuffer byteBuffer) throws IOException {
+                return 0;
+            }
+
+            @Override
+            public long position() throws IOException {
+                return position;
+            }
+
+            @Override
+            public SeekableByteChannel position(long l) throws IOException {
+                return null;
+            }
+
+            @Override
+            public long size() throws IOException {
+                return 0;
+            }
+
+            @Override
+            public SeekableByteChannel truncate(long l) throws IOException {
+                return null;
+            }
+
+            @Override
+            public boolean isOpen() {
+                return false;
+            }
+
+            @Override
+            public void close() throws IOException {
+
+            }
+        };
     }
 
     @Override
@@ -155,6 +213,12 @@ public class MTPFileSystemProvider extends FileSystemProvider {
             }
         } catch (IOException e) {
             throw new FileSystemNotFoundException(e.getMessage());
+        }
+    }
+
+    void validatePathProvider(Path path) {
+        if (!(path instanceof MTPPath)) {
+            throw new ProviderMismatchException();
         }
     }
 

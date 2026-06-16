@@ -1,9 +1,10 @@
 package org.meltzg.fs.mtp;
 
 import java.io.Closeable;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -49,7 +50,7 @@ public enum MTPDeviceBridge implements Closeable {
     public MTPFileStore getFileStore(MTPDeviceIdentifier deviceId, String path) {
         connectionLock.readLock().lock();
         try {
-            var parts = path.replaceFirst("^/", "").split("/");
+            var parts = pathParts(path);
             if (parts.length == 0) {
                 throw new IllegalArgumentException("First path part required");
             }
@@ -83,28 +84,86 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
+    /**
+     * Resolves a path to its MTPItemInfo.
+     * Returns null if path is "/" (device root).
+     * For storage-level paths like "/Storage Name", returns a pseudo-item with isFile=false.
+     */
+    public MTPItemInfo resolveItem(MTPDeviceIdentifier deviceId, String path) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var parts = pathParts(path);
+            synchronized (deviceConns.get(deviceId)) {
+                return resolveItemUnsafe(deviceConns.get(deviceId), parts);
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
+    /** Lists the children of a path. At "/" returns storages as pseudo-directory items. */
+    public MTPItemInfo[] listChildren(MTPDeviceIdentifier deviceId, String path) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var parts = pathParts(path);
+            synchronized (deviceConns.get(deviceId)) {
+                return listChildrenUnsafe(deviceConns.get(deviceId), parts);
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
+    public void createDirectory(MTPDeviceIdentifier deviceId, String path) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var parts = pathParts(path);
+            if (parts.length < 2) {
+                throw new IOException("Cannot create directory at device root or storage level: " + path);
+            }
+            synchronized (deviceConns.get(deviceId)) {
+                var conn = deviceConns.get(deviceId);
+                var libMtp = LibMTP.getInstance();
+                var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
+                if (storage == null) throw new NoSuchFileException("/" + parts[0]);
+                long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+                if (parts.length > 2) {
+                    var parentParts = Arrays.copyOf(parts, parts.length - 1);
+                    var parentItem = resolveItemUnsafe(conn, parentParts);
+                    parentId = parentItem.getItemId();
+                }
+                libMtp.createFolder(conn.getDeviceConn(), parts[parts.length - 1], parentId, storage.storageId());
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
+    public void delete(MTPDeviceIdentifier deviceId, String path) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var parts = pathParts(path);
+            synchronized (deviceConns.get(deviceId)) {
+                var conn = deviceConns.get(deviceId);
+                var item = resolveItemUnsafe(conn, parts);
+                if (item == null) throw new NoSuchFileException(path);
+                LibMTP.getInstance().deleteObject(conn.getDeviceConn(), item.getItemId());
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
     public byte[] getFileContent(MTPDeviceIdentifier deviceId, String path) throws IOException {
         connectionLock.readLock().lock();
         try {
-            var parts = path.replaceFirst("^/", "").split("/");
+            var parts = pathParts(path);
             synchronized (deviceConns.get(deviceId)) {
-                var children = getChildItems(deviceConns.get(deviceId), -1);
-                Optional<MTPItemInfo> foundPart = Optional.empty();
-                for (var part : parts) {
-                    foundPart = Arrays.stream(children).filter(mtpItemInfo -> mtpItemInfo.getFilename().equals(part)).findFirst();
-                    if (foundPart.isEmpty()) {
-                        break;
-                    }
-                }
-                if (foundPart.isEmpty() || !foundPart.get().getFilename().equals(parts[parts.length - 1])) {
-                    throw new FileNotFoundException(String.format("%s not found", path));
-                }
-
-                if (!foundPart.get().isFile()) {
-                    throw new IOException(String.format("%s is not a file", path));
-                }
-
-                return getFileContent(deviceConns.get(deviceId), foundPart.get().getItemId());
+                var conn = deviceConns.get(deviceId);
+                var item = resolveItemUnsafe(conn, parts);
+                if (item == null) throw new NoSuchFileException(path);
+                if (!item.isFile()) throw new IOException(path + " is not a file");
+                return getFileContent(conn, item.getItemId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -191,11 +250,59 @@ public enum MTPDeviceBridge implements Closeable {
         return LibMTP.getInstance().getFreeSpace(conn.getDeviceConn(), storageId);
     }
 
-    private MTPItemInfo[] getChildItems(MTPDeviceConnection conn, long itemId) throws IOException {
-        return LibMTP.getInstance().getChildItems(conn.getDeviceConn(), itemId);
+    /**
+     * Resolves path parts to an MTPItemInfo.
+     * parts=[] → null (device root)
+     * parts=["Storage"] → pseudo-item for the storage root directory
+     * parts=["Storage","a","b"] → the actual item at Storage/a/b
+     */
+    private MTPItemInfo resolveItemUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
+        if (parts.length == 0) return null;
+        var libMtp = LibMTP.getInstance();
+        var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
+        if (storage == null) throw new NoSuchFileException("/" + parts[0]);
+        if (parts.length == 1) {
+            return new MTPItemInfo(0, storage.storageId(), storage.storageId(), false, 0, 0, parts[0]);
+        }
+        long storageId = storage.storageId();
+        long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+        MTPItemInfo found = null;
+        for (int i = 1; i < parts.length; i++) {
+            var children = libMtp.getChildItems(conn.getDeviceConn(), storageId, parentId);
+            final String name = parts[i];
+            found = Arrays.stream(children).filter(c -> c.getFilename().equals(name)).findFirst().orElse(null);
+            if (found == null) {
+                throw new NoSuchFileException("/" + String.join("/", parts));
+            }
+            parentId = found.getItemId();
+        }
+        return found;
+    }
+
+    private MTPItemInfo[] listChildrenUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
+        var libMtp = LibMTP.getInstance();
+        if (parts.length == 0) {
+            return libMtp.listStorages(conn.getDeviceConn()).stream()
+                .map(s -> new MTPItemInfo(0, s.storageId(), s.storageId(), false, 0, 0, s.name()))
+                .toArray(MTPItemInfo[]::new);
+        }
+        var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
+        if (storage == null) throw new NoSuchFileException("/" + parts[0]);
+        long storageId = storage.storageId();
+        long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+        if (parts.length > 1) {
+            var dirItem = resolveItemUnsafe(conn, parts);
+            if (dirItem.isFile()) throw new NotDirectoryException("/" + String.join("/", parts));
+            parentId = dirItem.getItemId();
+        }
+        return libMtp.getChildItems(conn.getDeviceConn(), storageId, parentId);
     }
 
     private byte[] getFileContent(MTPDeviceConnection conn, long itemId) throws IOException {
         return LibMTP.getInstance().getFileContent(conn.getDeviceConn(), itemId);
+    }
+
+    static String[] pathParts(String path) {
+        return Arrays.stream(path.split("/")).filter(p -> !p.isEmpty()).toArray(String[]::new);
     }
 }

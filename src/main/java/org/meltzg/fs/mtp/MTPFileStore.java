@@ -23,7 +23,7 @@ public class MTPFileStore extends FileStore {
 
     @Override
     public String type() {
-        return null;
+        return "mtp";
     }
 
     @Override
@@ -43,7 +43,7 @@ public class MTPFileStore extends FileStore {
 
     @Override
     public long getUnallocatedSpace() throws IOException {
-        return 0;
+        return getUsableSpace();
     }
 
     @Override

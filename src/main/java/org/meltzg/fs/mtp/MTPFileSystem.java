@@ -4,10 +4,10 @@ import lombok.Getter;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.nio.file.spi.FileSystemProvider;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -15,6 +15,7 @@ public class MTPFileSystem extends FileSystem {
     private final MTPFileSystemProvider fileSystemProvider;
     @Getter
     private final MTPDeviceIdentifier deviceIdentifier;
+    private volatile boolean open = true;
 
     public MTPFileSystem(MTPFileSystemProvider fileSystemProvider, MTPDeviceIdentifier deviceIdentifier, Map<String, ?> env) {
         this.fileSystemProvider = fileSystemProvider;
@@ -28,12 +29,17 @@ public class MTPFileSystem extends FileSystem {
 
     @Override
     public void close() throws IOException {
-
+        if (open) {
+            open = false;
+            synchronized (fileSystemProvider.fileSystems) {
+                fileSystemProvider.fileSystems.remove(deviceIdentifier);
+            }
+        }
     }
 
     @Override
     public boolean isOpen() {
-        return false;
+        return open;
     }
 
     @Override
@@ -48,46 +54,60 @@ public class MTPFileSystem extends FileSystem {
 
     @Override
     public Iterable<Path> getRootDirectories() {
-        return null;
+        return List.of(getPath("/"));
     }
 
     @Override
     public Iterable<FileStore> getFileStores() {
-        return null;
+        try {
+            var bridge = MTPDeviceBridge.getInstance();
+            return bridge.listChildren(deviceIdentifier, "/").length == 0
+                ? List.of()
+                : List.of(fileSystemProvider.getFileStore(getPath("/")));
+        } catch (IOException e) {
+            return List.of();
+        }
     }
 
     @Override
     public Set<String> supportedFileAttributeViews() {
-        return null;
+        return Set.of("basic");
     }
 
     @Override
     public Path getPath(String first, String... more) {
-        var stringBuilder = new StringBuilder(first);
+        var sb = new StringBuilder(first);
         for (var segment : more) {
-            if (segment.length() > 0) {
-                if (stringBuilder.length() > 0) {
-                    stringBuilder.append("/");
-                }
-                stringBuilder.append(segment);
+            if (!segment.isEmpty()) {
+                if (sb.length() > 0) sb.append("/");
+                sb.append(segment);
             }
         }
-        var path = stringBuilder.toString();
-        return new MTPPath(this, path);
+        return new MTPPath(this, sb.toString());
     }
 
     @Override
     public PathMatcher getPathMatcher(String syntaxAndPattern) {
-        return null;
+        int colon = syntaxAndPattern.indexOf(':');
+        if (colon < 0) throw new IllegalArgumentException("Missing syntax in: " + syntaxAndPattern);
+        String syntax = syntaxAndPattern.substring(0, colon);
+        String pattern = syntaxAndPattern.substring(colon + 1);
+        return switch (syntax.toLowerCase()) {
+            case "glob" -> path -> path.getFileName() != null &&
+                FileSystems.getDefault().getPathMatcher("glob:" + pattern)
+                    .matches(Path.of(path.getFileName().toString()));
+            case "regex" -> path -> path.toString().matches(pattern);
+            default -> throw new UnsupportedOperationException("Unsupported syntax: " + syntax);
+        };
     }
 
     @Override
     public UserPrincipalLookupService getUserPrincipalLookupService() {
-        return null;
+        throw new UnsupportedOperationException("MTP filesystem does not support UserPrincipalLookupService");
     }
 
     @Override
     public WatchService newWatchService() throws IOException {
-        return null;
+        throw new UnsupportedOperationException("MTP filesystem does not support WatchService");
     }
 }

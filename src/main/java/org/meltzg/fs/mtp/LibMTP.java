@@ -9,6 +9,7 @@ import java.lang.invoke.VarHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 
 import static java.lang.foreign.MemoryLayout.PathElement.groupElement;
 import static java.lang.foreign.ValueLayout.*;
@@ -108,6 +109,8 @@ class LibMTP {
         FILE_LAYOUT.varHandle(groupElement("filename"));
     private static final VarHandle FILE_FILESIZE =
         FILE_LAYOUT.varHandle(groupElement("filesize"));
+    private static final VarHandle FILE_MODIFICATIONDATE =
+        FILE_LAYOUT.varHandle(groupElement("modificationdate"));
     private static final VarHandle FILE_FILETYPE =
         FILE_LAYOUT.varHandle(groupElement("filetype"));
     private static final VarHandle FILE_NEXT =
@@ -124,6 +127,8 @@ class LibMTP {
     private final MethodHandle getFilesAndFolders;
     private final MethodHandle getFileToFile;
     private final MethodHandle destroyFile;
+    private final MethodHandle createFolderFn;
+    private final MethodHandle deleteObjectFn;
     private final MethodHandle freeFn;
 
     private static final LibMTP INSTANCE = new LibMTP();
@@ -158,6 +163,10 @@ class LibMTP {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
         destroyFile = bind(linker, libmtp, "LIBMTP_destroy_file_t",
             FunctionDescriptor.ofVoid(ADDRESS));
+        createFolderFn = bind(linker, libmtp, "LIBMTP_Create_Folder",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
+        deleteObjectFn = bind(linker, libmtp, "LIBMTP_Delete_Object",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
         freeFn = linker.downcallHandle(
             linker.defaultLookup().find("free").orElseThrow(),
             FunctionDescriptor.ofVoid(ADDRESS));
@@ -283,10 +292,23 @@ class LibMTP {
         return -1;
     }
 
-    MTPItemInfo[] getChildItems(MemorySegment device, long parentId) throws IOException {
+    List<StorageResult> listStorages(MemorySegment device) {
+        var results = new ArrayList<StorageResult>();
+        var storage = firstStorage(device);
+        while (!MemorySegment.NULL.equals(storage)) {
+            storage = storage.reinterpret(DEVICE_STORAGE_LAYOUT.byteSize());
+            var descPtr = (MemorySegment) STORAGE_DESCRIPTION.get(storage, 0L);
+            long id = Integer.toUnsignedLong((int) STORAGE_ID.get(storage, 0L));
+            results.add(new StorageResult(readCString(descPtr), id));
+            storage = (MemorySegment) STORAGE_NEXT.get(storage, 0L);
+        }
+        return results;
+    }
+
+    MTPItemInfo[] getChildItems(MemorySegment device, long storageId, long parentId) throws IOException {
         try {
             var filePtr = (MemorySegment) getFilesAndFolders.invokeExact(
-                device, LIBMTP_FILES_AND_FOLDERS_ROOT, (int) parentId);
+                device, (int) storageId, (int) parentId);
 
             var items = new ArrayList<MTPItemInfo>();
             while (!MemorySegment.NULL.equals(filePtr)) {
@@ -298,6 +320,7 @@ class LibMTP {
                     Integer.toUnsignedLong((int) FILE_STORAGE_ID.get(file, 0L)),
                     (int) FILE_FILETYPE.get(file, 0L) != LIBMTP_FILETYPE_FOLDER,
                     (long) FILE_FILESIZE.get(file, 0L),
+                    (long) FILE_MODIFICATIONDATE.get(file, 0L),
                     readCString((MemorySegment) FILE_FILENAME.get(file, 0L))
                 ));
                 destroyFile.invokeExact(filePtr);
@@ -306,6 +329,30 @@ class LibMTP {
             return items.toArray(new MTPItemInfo[0]);
         } catch (Throwable t) {
             throw new IOException("Failed to list files and folders", t);
+        }
+    }
+
+    long createFolder(MemorySegment device, String name, long parentId, long storageId) throws IOException {
+        try (var arena = Arena.ofConfined()) {
+            var nameSeg = arena.allocateUtf8String(name);
+            int folderId = (int) createFolderFn.invokeExact(device, nameSeg, (int) parentId, (int) storageId);
+            if (folderId == 0) throw new IOException("LIBMTP_Create_Folder failed for: " + name);
+            return Integer.toUnsignedLong(folderId);
+        } catch (IOException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IOException("Failed to create folder: " + name, t);
+        }
+    }
+
+    void deleteObject(MemorySegment device, long itemId) throws IOException {
+        try {
+            int ret = (int) deleteObjectFn.invokeExact(device, (int) itemId);
+            if (ret != 0) throw new IOException("LIBMTP_Delete_Object failed for id: " + itemId);
+        } catch (IOException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IOException("Failed to delete object: " + itemId, t);
         }
     }
 

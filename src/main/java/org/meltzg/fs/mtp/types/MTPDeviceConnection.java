@@ -2,9 +2,11 @@ package org.meltzg.fs.mtp.types;
 
 import lombok.Value;
 
+import java.lang.foreign.MemorySegment;
+
 @Value
 public class MTPDeviceConnection {
     MTPDeviceIdentifier deviceId;
-    long rawDeviceConn;
-    long deviceConn;
+    MemorySegment rawDeviceConn;
+    MemorySegment deviceConn;
 }

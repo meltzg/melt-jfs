@@ -3,9 +3,9 @@ package org.meltzg.fs.mtp;
 import java.io.Closeable;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.Predicate;
 
 import org.meltzg.fs.mtp.types.MTPDeviceConnection;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
@@ -22,11 +22,13 @@ public enum MTPDeviceBridge implements Closeable {
     private Map<MTPDeviceIdentifier, MTPDeviceInfo> deviceInfo;
     @Getter
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
+    private MemorySegment rawDevicesAllocation;
 
     private MTPDeviceBridge() {
         this.connectionLock = new ReentrantReadWriteLock();
         this.deviceInfo = new HashMap<>();
         this.deviceConns = new LinkedHashMap<>();
+        this.rawDevicesAllocation = MemorySegment.NULL;
     }
 
     public static MTPDeviceBridge getInstance() throws IOException {
@@ -128,32 +130,72 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
-    private void closeUnsafe() throws IOException {
-        terminateMTP(deviceConns.values().toArray(new MTPDeviceConnection[deviceConns.size()]));
+    private void closeUnsafe() {
+        var libMtp = LibMTP.getInstance();
+        for (var conn : deviceConns.values()) {
+            libMtp.releaseDevice(conn.getDeviceConn());
+        }
+        if (!MemorySegment.NULL.equals(rawDevicesAllocation)) {
+            libMtp.free(rawDevicesAllocation);
+            rawDevicesAllocation = MemorySegment.NULL;
+        }
         deviceInfo.clear();
         deviceConns.clear();
     }
 
-    private static native void initMTP();
+    private MTPDeviceConnection[] getDeviceConnections() throws IOException {
+        var libMtp = LibMTP.getInstance();
+        var result = libMtp.detectRawDevices();
+        rawDevicesAllocation = result.allocation();
 
-    private native void terminateMTP(MTPDeviceConnection[] deviceConn);
+        var connections = new MTPDeviceConnection[result.count()];
+        for (int i = 0; i < result.count(); i++) {
+            var rawDevice = libMtp.rawDeviceAt(result.allocation(), i);
+            var device = libMtp.openRawDevice(rawDevice);
+            var serial = libMtp.getSerialNumber(device);
+            var vendorId = Short.toUnsignedInt(libMtp.getVendorId(rawDevice));
+            var productId = Short.toUnsignedInt(libMtp.getProductId(rawDevice));
+            connections[i] = new MTPDeviceConnection(
+                new MTPDeviceIdentifier(vendorId, productId, serial), rawDevice, device);
+        }
+        return connections;
+    }
 
-    private native MTPDeviceConnection[] getDeviceConnections() throws IOException;
+    private MTPDeviceInfo getDeviceInfo(MTPDeviceConnection conn) {
+        var libMtp = LibMTP.getInstance();
+        var device = conn.getDeviceConn();
+        var rawDevice = conn.getRawDeviceConn();
+        return new MTPDeviceInfo(
+            conn.getDeviceId(),
+            libMtp.getFriendlyName(device),
+            libMtp.getModelName(device),
+            libMtp.getManufacturerName(device),
+            Integer.toUnsignedLong(libMtp.getBusLocation(rawDevice)),
+            Byte.toUnsignedLong(libMtp.getDevNum(rawDevice))
+        );
+    }
 
-    private native MTPDeviceInfo getDeviceInfo(MTPDeviceConnection deviceConn);
+    private MTPFileStore getFileStore(MTPDeviceConnection conn, String storageName) {
+        var result = LibMTP.getInstance().findStorage(conn.getDeviceConn(), storageName);
+        if (result == null) {
+            throw new IllegalArgumentException("Storage not found: " + storageName);
+        }
+        return new MTPFileStore(result.name(), conn.getDeviceId(), result.storageId());
+    }
 
-    private native MTPFileStore getFileStore(MTPDeviceConnection deviceConn, String storageName);
+    private long getCapacity(MTPDeviceConnection conn, long storageId) {
+        return LibMTP.getInstance().getCapacity(conn.getDeviceConn(), storageId);
+    }
 
-    private native long getCapacity(MTPDeviceConnection deviceConn, long storageId);
+    private long getFreeSpace(MTPDeviceConnection conn, long storageId) {
+        return LibMTP.getInstance().getFreeSpace(conn.getDeviceConn(), storageId);
+    }
 
-    private native long getFreeSpace(MTPDeviceConnection deviceConn, long storageId);
+    private MTPItemInfo[] getChildItems(MTPDeviceConnection conn, long itemId) throws IOException {
+        return LibMTP.getInstance().getChildItems(conn.getDeviceConn(), itemId);
+    }
 
-    private native MTPItemInfo[] getChildItems(MTPDeviceConnection deviceConn, long itemId);
-
-    private native byte[] getFileContent(MTPDeviceConnection deviceConn, long itemId);
-
-    static {
-        System.loadLibrary("jmtp");
-        initMTP();
+    private byte[] getFileContent(MTPDeviceConnection conn, long itemId) throws IOException {
+        return LibMTP.getInstance().getFileContent(conn.getDeviceConn(), itemId);
     }
 }

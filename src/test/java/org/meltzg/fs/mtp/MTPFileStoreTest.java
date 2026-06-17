@@ -1,13 +1,11 @@
 package org.meltzg.fs.mtp;
 
 import org.apache.commons.io.FileUtils;
-import org.junit.Test;
+import org.junit.*;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
-import java.nio.file.FileStore;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.*;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -16,17 +14,22 @@ public class MTPFileStoreTest {
 
     private static FileStore fileStore;
 
-    static {
-        try {
-            fileStore = Files.getFileStore(Paths.get(MTPFileSystemProviderTest.getURI("Internal storage")));
-        } catch (URISyntaxException | IOException e) {
-            e.printStackTrace();
-        }
+    @BeforeClass
+    public static void setUp() throws IOException, URISyntaxException {
+        MTPDeviceBridge.setLibMTP(new FakeLibMTP());
+        MTPDeviceBridge.INSTANCE.close();
+        fileStore = Files.getFileStore(Paths.get(MTPFileSystemProviderTest.getURI(FakeLibMTP.STORAGE_NAME)));
+    }
+
+    @AfterClass
+    public static void tearDown() throws IOException {
+        MTPDeviceBridge.INSTANCE.close();
+        MTPDeviceBridge.setLibMTP(null);
     }
 
     @Test
     public void name() {
-        assertEquals("Internal storage", fileStore.name());
+        assertEquals(FakeLibMTP.STORAGE_NAME, fileStore.name());
     }
 
     @Test

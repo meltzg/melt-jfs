@@ -9,5 +9,6 @@ public class MTPItemInfo {
     long storageId;
     boolean isFile;
     long filesize;
+    long modificationDate;  // seconds since epoch
     String filename;
 }

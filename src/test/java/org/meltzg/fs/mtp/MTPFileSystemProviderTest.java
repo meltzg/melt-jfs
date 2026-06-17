@@ -1,6 +1,8 @@
 package org.meltzg.fs.mtp;
 
+import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 
@@ -17,10 +19,22 @@ import static org.junit.Assert.*;
 
 public class MTPFileSystemProviderTest {
     static final MTPDeviceIdentifier deviceIdentifier = new MTPDeviceIdentifier(
-            16642, 4497, "F2000018D562F2A412B4"
+            FakeLibMTP.VENDOR_ID, FakeLibMTP.PRODUCT_ID, FakeLibMTP.SERIAL
     );
 
     MTPFileSystemProvider provider;
+
+    @BeforeClass
+    public static void injectFake() throws Exception {
+        MTPDeviceBridge.setLibMTP(new FakeLibMTP());
+        MTPDeviceBridge.INSTANCE.close();
+    }
+
+    @AfterClass
+    public static void removeFake() throws Exception {
+        MTPDeviceBridge.INSTANCE.close();
+        MTPDeviceBridge.setLibMTP(null);
+    }
 
     @Before
     public void setUp() throws Exception {
@@ -76,7 +90,7 @@ public class MTPFileSystemProviderTest {
         assertEquals("Internal storage", fileStore.name());
     }
 
-    @Test(expected = IOException.class)
+    @Test(expected = NoSuchFileException.class)
     public void getFileStoreNotFound() throws URISyntaxException, IOException {
         var uri = getURI("asdf");
         var path = Paths.get(uri);

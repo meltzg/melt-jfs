@@ -21,21 +21,28 @@ dependencies {
     testImplementation("commons-io:commons-io:2.15.1")
 }
 
-// Locate libumockdev-preload.so via ldconfig; absent when umockdev tools are not installed
-val umockdevPreload: String? by lazy {
-    try {
-        val proc = ProcessBuilder("ldconfig", "-p").start()
-        proc.inputStream.bufferedReader().lineSequence()
-            .find { it.contains("libumockdev-preload.so") }
-            ?.replaceFirst(Regex(".*=> "), "")
-            ?.trim()
-    } catch (_: Exception) { null }
+// Source set for developer tools — compiled separately, never included in the published JAR.
+val dev by sourceSets.creating {
+    java.srcDir("src/dev/java")
+    compileClasspath += sourceSets.main.get().output
+    compileClasspath += configurations["runtimeClasspath"]
+    runtimeClasspath += sourceSets.main.get().output
+    runtimeClasspath += configurations["runtimeClasspath"]
+}
+
+tasks.named<JavaCompile>("compileDevJava") {
+    options.compilerArgs.add("--enable-preview")
+}
+
+tasks.register<JavaExec>("browse") {
+    description = "Walk and print the directory tree of all connected MTP devices."
+    classpath = dev.runtimeClasspath
+    mainClass = "org.meltzg.fs.mtp.MTPBrowser"
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
+    // pass an optional depth limit: ./gradlew browse --args="2"
 }
 
 tasks.test {
     // Required for FFM restricted operations (MemorySegment.reinterpret, libraryLookup)
     jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
-    // Intercept open() calls on /dev/bus/usb so libusb sees the umockdev fake device tree.
-    // Only set when the umockdev tools package is installed; tests skip gracefully without it.
-    umockdevPreload?.let { environment("LD_PRELOAD", it) }
 }

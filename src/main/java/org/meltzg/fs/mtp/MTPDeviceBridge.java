@@ -25,11 +25,23 @@ public enum MTPDeviceBridge implements Closeable {
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
     private MemorySegment rawDevicesAllocation;
 
+    // Allows tests to inject a fake LibMTP without loading native libmtp
+    private static volatile LibMTP libOverride = null;
+
     private MTPDeviceBridge() {
         this.connectionLock = new ReentrantReadWriteLock();
         this.deviceInfo = new HashMap<>();
         this.deviceConns = new LinkedHashMap<>();
         this.rawDevicesAllocation = MemorySegment.NULL;
+    }
+
+    static void setLibMTP(LibMTP impl) {
+        libOverride = impl;
+    }
+
+    private static LibMTP lib() {
+        var o = libOverride;
+        return o != null ? o : NativeLibMTP.getInstance();
     }
 
     public static MTPDeviceBridge getInstance() throws IOException {
@@ -47,7 +59,7 @@ public enum MTPDeviceBridge implements Closeable {
         return INSTANCE;
     }
 
-    public MTPFileStore getFileStore(MTPDeviceIdentifier deviceId, String path) {
+    public MTPFileStore getFileStore(MTPDeviceIdentifier deviceId, String path) throws IOException {
         connectionLock.readLock().lock();
         try {
             var parts = pathParts(path);
@@ -123,7 +135,7 @@ public enum MTPDeviceBridge implements Closeable {
             }
             synchronized (deviceConns.get(deviceId)) {
                 var conn = deviceConns.get(deviceId);
-                var libMtp = LibMTP.getInstance();
+                var libMtp = lib();
                 var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
                 if (storage == null) throw new NoSuchFileException("/" + parts[0]);
                 long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
@@ -147,7 +159,7 @@ public enum MTPDeviceBridge implements Closeable {
                 var conn = deviceConns.get(deviceId);
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
-                LibMTP.getInstance().deleteObject(conn.getDeviceConn(), item.getItemId());
+                lib().deleteObject(conn.getDeviceConn(), item.getItemId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -190,7 +202,7 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private void closeUnsafe() {
-        var libMtp = LibMTP.getInstance();
+        var libMtp = lib();
         for (var conn : deviceConns.values()) {
             libMtp.releaseDevice(conn.getDeviceConn());
         }
@@ -203,25 +215,28 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private MTPDeviceConnection[] getDeviceConnections() throws IOException {
-        var libMtp = LibMTP.getInstance();
+        var libMtp = lib();
         var result = libMtp.detectRawDevices();
         rawDevicesAllocation = result.allocation();
 
-        var connections = new MTPDeviceConnection[result.count()];
+        var connections = new ArrayList<MTPDeviceConnection>(result.count());
         for (int i = 0; i < result.count(); i++) {
             var rawDevice = libMtp.rawDeviceAt(result.allocation(), i);
             var device = libMtp.openRawDevice(rawDevice);
+            if (MemorySegment.NULL.equals(device)) {
+                continue;
+            }
             var serial = libMtp.getSerialNumber(device);
             var vendorId = Short.toUnsignedInt(libMtp.getVendorId(rawDevice));
             var productId = Short.toUnsignedInt(libMtp.getProductId(rawDevice));
-            connections[i] = new MTPDeviceConnection(
-                new MTPDeviceIdentifier(vendorId, productId, serial), rawDevice, device);
+            connections.add(new MTPDeviceConnection(
+                new MTPDeviceIdentifier(vendorId, productId, serial), rawDevice, device));
         }
-        return connections;
+        return connections.toArray(new MTPDeviceConnection[0]);
     }
 
     private MTPDeviceInfo getDeviceInfo(MTPDeviceConnection conn) {
-        var libMtp = LibMTP.getInstance();
+        var libMtp = lib();
         var device = conn.getDeviceConn();
         var rawDevice = conn.getRawDeviceConn();
         return new MTPDeviceInfo(
@@ -234,20 +249,20 @@ public enum MTPDeviceBridge implements Closeable {
         );
     }
 
-    private MTPFileStore getFileStore(MTPDeviceConnection conn, String storageName) {
-        var result = LibMTP.getInstance().findStorage(conn.getDeviceConn(), storageName);
+    private MTPFileStore getFileStore(MTPDeviceConnection conn, String storageName) throws IOException {
+        var result = lib().findStorage(conn.getDeviceConn(), storageName);
         if (result == null) {
-            throw new IllegalArgumentException("Storage not found: " + storageName);
+            throw new NoSuchFileException("/" + storageName);
         }
         return new MTPFileStore(result.name(), conn.getDeviceId(), result.storageId());
     }
 
     private long getCapacity(MTPDeviceConnection conn, long storageId) {
-        return LibMTP.getInstance().getCapacity(conn.getDeviceConn(), storageId);
+        return lib().getCapacity(conn.getDeviceConn(), storageId);
     }
 
     private long getFreeSpace(MTPDeviceConnection conn, long storageId) {
-        return LibMTP.getInstance().getFreeSpace(conn.getDeviceConn(), storageId);
+        return lib().getFreeSpace(conn.getDeviceConn(), storageId);
     }
 
     /**
@@ -258,7 +273,7 @@ public enum MTPDeviceBridge implements Closeable {
      */
     private MTPItemInfo resolveItemUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
         if (parts.length == 0) return null;
-        var libMtp = LibMTP.getInstance();
+        var libMtp = lib();
         var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
         if (storage == null) throw new NoSuchFileException("/" + parts[0]);
         if (parts.length == 1) {
@@ -280,7 +295,7 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private MTPItemInfo[] listChildrenUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
-        var libMtp = LibMTP.getInstance();
+        var libMtp = lib();
         if (parts.length == 0) {
             return libMtp.listStorages(conn.getDeviceConn()).stream()
                 .map(s -> new MTPItemInfo(0, s.storageId(), s.storageId(), false, 0, 0, s.name()))
@@ -299,7 +314,7 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private byte[] getFileContent(MTPDeviceConnection conn, long itemId) throws IOException {
-        return LibMTP.getInstance().getFileContent(conn.getDeviceConn(), itemId);
+        return lib().getFileContent(conn.getDeviceConn(), itemId);
     }
 
     static String[] pathParts(String path) {

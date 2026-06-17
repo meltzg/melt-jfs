@@ -45,9 +45,9 @@ public class MTPDeviceBridgeIntegrationTest {
         for (MTPDeviceIdentifier id : bridge.getDeviceConns().keySet()) {
             MTPDeviceInfo info = bridge.getDeviceInfo().get(id);
             assertNotNull("DeviceInfo missing for " + id, info);
-            assertFalse("Description should not be empty", info.getDescription().isBlank());
+            assertFalse("Description should not be empty", info.description().isBlank());
             System.out.printf("Found device: vendor=%d product=%d serial=%s description=%s%n",
-                id.getVendorId(), id.getProductId(), id.getSerial(), info.getDescription());
+                id.vendorId(), id.productId(), id.serial(), info.description());
         }
     }
 

@@ -1,7 +1,5 @@
 package org.meltzg.fs.mtp;
 
-import lombok.RequiredArgsConstructor;
-
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -10,11 +8,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.Arrays;
 
-@RequiredArgsConstructor
 public class MTPPath implements Path {
     private final MTPFileSystem fileSystem;
     private final String path;
     private String[] parts;
+
+    public MTPPath(MTPFileSystem fileSystem, String path) {
+        this.fileSystem = fileSystem;
+        this.path = path;
+    }
 
     @Override
     public MTPFileSystem getFileSystem() {

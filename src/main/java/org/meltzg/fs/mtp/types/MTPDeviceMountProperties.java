@@ -1,8 +1,5 @@
 package org.meltzg.fs.mtp.types;
 
-import lombok.AllArgsConstructor;
-
-@AllArgsConstructor
 public enum MTPDeviceMountProperties {
     DEVICE_ID("deviceId"),
     FRIENDLY_NAME("friendlyName"),
@@ -12,4 +9,8 @@ public enum MTPDeviceMountProperties {
     BUS_LOCATION("busLocation");
 
     private final String value;
+
+    MTPDeviceMountProperties(String value) {
+        this.value = value;
+    }
 }

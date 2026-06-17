@@ -34,7 +34,7 @@ public class MTPDeviceBridgeTest {
             assertTrue(bridge.getDeviceConns().size() > 0);
             var deviceInfo = bridge.getDeviceInfo().get(EXPECTED_ID);
             assertNotNull("Device not found", deviceInfo);
-            assertEquals(FakeLibMTP.MODEL_NAME, deviceInfo.getDescription());
+            assertEquals(FakeLibMTP.MODEL_NAME, deviceInfo.description());
         }
     }
 }

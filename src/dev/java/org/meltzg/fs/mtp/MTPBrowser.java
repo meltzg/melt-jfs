@@ -28,7 +28,7 @@ public class MTPBrowser {
         for (var entry : bridge.getDeviceInfo().entrySet()) {
             var id = entry.getKey();
             var info = entry.getValue();
-            System.out.printf("%s  [%s]%n", info.getDescription(), id);
+            System.out.printf("%s  [%s]%n", info.description(), id);
 
             var provider = new MTPFileSystemProvider();
             var uri = URI.create("mtp://" + id + "/");

@@ -1,20 +1,23 @@
 package org.meltzg.fs.mtp;
 
-import lombok.EqualsAndHashCode;
-import lombok.Value;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 
 import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
+import java.util.Objects;
 
-@EqualsAndHashCode(callSuper = true)
-@Value
 public class MTPFileStore extends FileStore {
-    String name;
-    MTPDeviceIdentifier deviceId;
-    long storageId;
+    private final String name;
+    private final MTPDeviceIdentifier deviceId;
+    private final long storageId;
+
+    public MTPFileStore(String name, MTPDeviceIdentifier deviceId, long storageId) {
+        this.name = name;
+        this.deviceId = deviceId;
+        this.storageId = storageId;
+    }
 
     @Override
     public String name() {
@@ -64,5 +67,20 @@ public class MTPFileStore extends FileStore {
     @Override
     public Object getAttribute(String attribute) throws IOException {
         return null;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof MTPFileStore other)) return false;
+        if (!super.equals(o)) return false;
+        return storageId == other.storageId
+            && Objects.equals(name, other.name)
+            && Objects.equals(deviceId, other.deviceId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), name, deviceId, storageId);
     }
 }

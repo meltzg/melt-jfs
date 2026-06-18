@@ -109,7 +109,7 @@ public class MTPFileSystemProvider extends FileSystemProvider {
 
         var paths = new ArrayList<Path>();
         for (var item : items) {
-            var child = (MTPPath) dir.toAbsolutePath().resolve(item.getFilename());
+            var child = (MTPPath) dir.toAbsolutePath().resolve(item.filename());
             if (filter.accept(child)) paths.add(child);
         }
 

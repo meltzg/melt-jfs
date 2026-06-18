@@ -1,14 +1,11 @@
 package org.meltzg.fs.mtp.types;
 
-import lombok.Value;
-
-@Value
-public class MTPItemInfo {
-    long parentId;
-    long itemId;
-    long storageId;
-    boolean isFile;
-    long filesize;
-    long modificationDate;  // seconds since epoch
-    String filename;
+public record MTPItemInfo(
+        long parentId,
+        long itemId,
+        long storageId,
+        boolean isFile,
+        long filesize,
+        long modificationDate,
+        String filename) {
 }

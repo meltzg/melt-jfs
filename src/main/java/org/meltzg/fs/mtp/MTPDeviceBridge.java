@@ -12,16 +12,13 @@ import org.meltzg.fs.mtp.types.MTPDeviceConnection;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 import org.meltzg.fs.mtp.types.MTPDeviceInfo;
 
-import lombok.Getter;
 import org.meltzg.fs.mtp.types.MTPItemInfo;
 
 public enum MTPDeviceBridge implements Closeable {
     INSTANCE;
 
     private ReentrantReadWriteLock connectionLock;
-    @Getter
     private Map<MTPDeviceIdentifier, MTPDeviceInfo> deviceInfo;
-    @Getter
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
     private MemorySegment rawDevicesAllocation;
 
@@ -33,6 +30,14 @@ public enum MTPDeviceBridge implements Closeable {
         this.deviceInfo = new HashMap<>();
         this.deviceConns = new LinkedHashMap<>();
         this.rawDevicesAllocation = MemorySegment.NULL;
+    }
+
+    public Map<MTPDeviceIdentifier, MTPDeviceInfo> getDeviceInfo() {
+        return deviceInfo;
+    }
+
+    public LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> getDeviceConns() {
+        return deviceConns;
     }
 
     static void setLibMTP(LibMTP impl) {
@@ -136,15 +141,15 @@ public enum MTPDeviceBridge implements Closeable {
             synchronized (deviceConns.get(deviceId)) {
                 var conn = deviceConns.get(deviceId);
                 var libMtp = lib();
-                var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
+                var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
                 if (storage == null) throw new NoSuchFileException("/" + parts[0]);
                 long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
                 if (parts.length > 2) {
                     var parentParts = Arrays.copyOf(parts, parts.length - 1);
                     var parentItem = resolveItemUnsafe(conn, parentParts);
-                    parentId = parentItem.getItemId();
+                    parentId = parentItem.itemId();
                 }
-                libMtp.createFolder(conn.getDeviceConn(), parts[parts.length - 1], parentId, storage.storageId());
+                libMtp.createFolder(conn.deviceConn(), parts[parts.length - 1], parentId, storage.storageId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -159,7 +164,7 @@ public enum MTPDeviceBridge implements Closeable {
                 var conn = deviceConns.get(deviceId);
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
-                lib().deleteObject(conn.getDeviceConn(), item.getItemId());
+                lib().deleteObject(conn.deviceConn(), item.itemId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -175,7 +180,7 @@ public enum MTPDeviceBridge implements Closeable {
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
                 if (!item.isFile()) throw new IOException(path + " is not a file");
-                return getFileContent(conn, item.getItemId());
+                return getFileContent(conn, item.itemId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -196,15 +201,15 @@ public enum MTPDeviceBridge implements Closeable {
         connectionLock.writeLock().lock();
         closeUnsafe();
         for (var conn : getDeviceConnections()) {
-            deviceConns.put(conn.getDeviceId(), conn);
-            deviceInfo.put(conn.getDeviceId(), getDeviceInfo(conn));
+            deviceConns.put(conn.deviceId(), conn);
+            deviceInfo.put(conn.deviceId(), getDeviceInfo(conn));
         }
     }
 
     private void closeUnsafe() {
         var libMtp = lib();
         for (var conn : deviceConns.values()) {
-            libMtp.releaseDevice(conn.getDeviceConn());
+            libMtp.releaseDevice(conn.deviceConn());
         }
         if (!MemorySegment.NULL.equals(rawDevicesAllocation)) {
             libMtp.free(rawDevicesAllocation);
@@ -237,10 +242,10 @@ public enum MTPDeviceBridge implements Closeable {
 
     private MTPDeviceInfo getDeviceInfo(MTPDeviceConnection conn) {
         var libMtp = lib();
-        var device = conn.getDeviceConn();
-        var rawDevice = conn.getRawDeviceConn();
+        var device = conn.deviceConn();
+        var rawDevice = conn.rawDeviceConn();
         return new MTPDeviceInfo(
-            conn.getDeviceId(),
+            conn.deviceId(),
             libMtp.getFriendlyName(device),
             libMtp.getModelName(device),
             libMtp.getManufacturerName(device),
@@ -250,19 +255,19 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private MTPFileStore getFileStore(MTPDeviceConnection conn, String storageName) throws IOException {
-        var result = lib().findStorage(conn.getDeviceConn(), storageName);
+        var result = lib().findStorage(conn.deviceConn(), storageName);
         if (result == null) {
             throw new NoSuchFileException("/" + storageName);
         }
-        return new MTPFileStore(result.name(), conn.getDeviceId(), result.storageId());
+        return new MTPFileStore(result.name(), conn.deviceId(), result.storageId());
     }
 
     private long getCapacity(MTPDeviceConnection conn, long storageId) {
-        return lib().getCapacity(conn.getDeviceConn(), storageId);
+        return lib().getCapacity(conn.deviceConn(), storageId);
     }
 
     private long getFreeSpace(MTPDeviceConnection conn, long storageId) {
-        return lib().getFreeSpace(conn.getDeviceConn(), storageId);
+        return lib().getFreeSpace(conn.deviceConn(), storageId);
     }
 
     /**
@@ -274,7 +279,7 @@ public enum MTPDeviceBridge implements Closeable {
     private MTPItemInfo resolveItemUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
         if (parts.length == 0) return null;
         var libMtp = lib();
-        var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
+        var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
         if (storage == null) throw new NoSuchFileException("/" + parts[0]);
         if (parts.length == 1) {
             return new MTPItemInfo(0, storage.storageId(), storage.storageId(), false, 0, 0, parts[0]);
@@ -283,13 +288,13 @@ public enum MTPDeviceBridge implements Closeable {
         long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
         MTPItemInfo found = null;
         for (int i = 1; i < parts.length; i++) {
-            var children = libMtp.getChildItems(conn.getDeviceConn(), storageId, parentId);
+            var children = libMtp.getChildItems(conn.deviceConn(), storageId, parentId);
             final String name = parts[i];
-            found = Arrays.stream(children).filter(c -> c.getFilename().equals(name)).findFirst().orElse(null);
+            found = Arrays.stream(children).filter(c -> c.filename().equals(name)).findFirst().orElse(null);
             if (found == null) {
                 throw new NoSuchFileException("/" + String.join("/", parts));
             }
-            parentId = found.getItemId();
+            parentId = found.itemId();
         }
         return found;
     }
@@ -297,24 +302,24 @@ public enum MTPDeviceBridge implements Closeable {
     private MTPItemInfo[] listChildrenUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
         var libMtp = lib();
         if (parts.length == 0) {
-            return libMtp.listStorages(conn.getDeviceConn()).stream()
+            return libMtp.listStorages(conn.deviceConn()).stream()
                 .map(s -> new MTPItemInfo(0, s.storageId(), s.storageId(), false, 0, 0, s.name()))
                 .toArray(MTPItemInfo[]::new);
         }
-        var storage = libMtp.findStorage(conn.getDeviceConn(), parts[0]);
+        var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
         if (storage == null) throw new NoSuchFileException("/" + parts[0]);
         long storageId = storage.storageId();
         long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
         if (parts.length > 1) {
             var dirItem = resolveItemUnsafe(conn, parts);
             if (dirItem.isFile()) throw new NotDirectoryException("/" + String.join("/", parts));
-            parentId = dirItem.getItemId();
+            parentId = dirItem.itemId();
         }
-        return libMtp.getChildItems(conn.getDeviceConn(), storageId, parentId);
+        return libMtp.getChildItems(conn.deviceConn(), storageId, parentId);
     }
 
     private byte[] getFileContent(MTPDeviceConnection conn, long itemId) throws IOException {
-        return lib().getFileContent(conn.getDeviceConn(), itemId);
+        return lib().getFileContent(conn.deviceConn(), itemId);
     }
 
     static String[] pathParts(String path) {

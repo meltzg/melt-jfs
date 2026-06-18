@@ -15,7 +15,7 @@ class MTPBasicFileAttributes implements BasicFileAttributes {
 
     @Override
     public FileTime lastModifiedTime() {
-        return FileTime.from(item.getModificationDate(), TimeUnit.SECONDS);
+        return FileTime.from(item.modificationDate(), TimeUnit.SECONDS);
     }
 
     @Override
@@ -50,11 +50,11 @@ class MTPBasicFileAttributes implements BasicFileAttributes {
 
     @Override
     public long size() {
-        return item.getFilesize();
+        return item.filesize();
     }
 
     @Override
     public Object fileKey() {
-        return item.getItemId();
+        return item.itemId();
     }
 }

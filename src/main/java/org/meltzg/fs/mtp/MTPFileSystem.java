@@ -1,6 +1,5 @@
 package org.meltzg.fs.mtp;
 
-import lombok.Getter;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 
 import java.io.IOException;
@@ -13,13 +12,16 @@ import java.util.Set;
 
 public class MTPFileSystem extends FileSystem {
     private final MTPFileSystemProvider fileSystemProvider;
-    @Getter
     private final MTPDeviceIdentifier deviceIdentifier;
     private volatile boolean open = true;
 
     public MTPFileSystem(MTPFileSystemProvider fileSystemProvider, MTPDeviceIdentifier deviceIdentifier, Map<String, ?> env) {
         this.fileSystemProvider = fileSystemProvider;
         this.deviceIdentifier = deviceIdentifier;
+    }
+
+    public MTPDeviceIdentifier getDeviceIdentifier() {
+        return deviceIdentifier;
     }
 
     @Override

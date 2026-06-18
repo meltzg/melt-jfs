@@ -12,6 +12,7 @@ import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributeView;
 import java.util.ArrayList;
 import java.util.stream.Collectors;
 
@@ -151,6 +152,36 @@ public class MTPFileSystemProviderTest {
 //        assertTrue(storageSet.containsAll(dirSet));
 //        assertTrue(rootSet.containsAll(storageSet));
 //    }
+
+    @Test
+    public void getFileAttributeViewReturnsBasicView() throws Exception {
+        var path = Paths.get(getURI(""));
+        var view = Files.getFileAttributeView(path, BasicFileAttributeView.class);
+        assertNotNull("basic view should be available", view);
+        assertEquals("basic", view.name());
+        assertTrue("device root should be a directory", view.readAttributes().isDirectory());
+    }
+
+    @Test
+    public void readAttributesStarReturnsAllBasicAttributes() throws Exception {
+        var attrs = Files.readAttributes(Paths.get(getURI("")), "*");
+        assertEquals(9, attrs.size());
+        assertEquals(Boolean.TRUE, attrs.get("isDirectory"));
+        assertTrue(attrs.containsKey("fileKey"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void readAttributesUnknownAttributeThrows() throws Exception {
+        Files.readAttributes(Paths.get(getURI("")), "basic:bogus");
+    }
+
+    @Test
+    public void normalizeRelativePathKeepsLeadingParentRefs() throws Exception {
+        var fs = Paths.get(getURI("")).getFileSystem();
+        assertEquals("..", fs.getPath("a/../..").normalize().toString());
+        assertEquals("../b", fs.getPath("../a/../b").normalize().toString());
+        assertEquals("/y", fs.getPath("/x/../y").normalize().toString());
+    }
 
     @Test
     public void validateUri() throws URISyntaxException, IOException {

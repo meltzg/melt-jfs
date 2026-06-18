@@ -3,9 +3,12 @@ package org.meltzg.fs.mtp;
 import java.io.Closeable;
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.meltzg.fs.mtp.types.MTPDeviceConnection;
@@ -17,13 +20,25 @@ import org.meltzg.fs.mtp.types.MTPItemInfo;
 public enum MTPDeviceBridge implements Closeable {
     INSTANCE;
 
+    // How long a device scan is trusted before getInstance() re-detects attached devices.
+    private static final long DETECT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2);
+
     private ReentrantReadWriteLock connectionLock;
     private Map<MTPDeviceIdentifier, MTPDeviceInfo> deviceInfo;
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
     private MemorySegment rawDevicesAllocation;
 
+    // Identity (vendor/product/bus/devnum) of the raw devices seen at the last scan, used to detect
+    // hot-plug/unplug/reconnect without reopening still-present devices.
+    private Set<RawDeviceSignature> lastSignature = Set.of();
+    private volatile boolean devicesDetected = false;
+    private volatile long lastDetectNanos = 0L;
+
     // Allows tests to inject a fake LibMTP without loading native libmtp
     private static volatile LibMTP libOverride = null;
+
+    /** A physical device's USB identity, stable while attached, used to detect topology changes. */
+    private record RawDeviceSignature(int vendorId, int productId, int busLocation, int devNum) {}
 
     private MTPDeviceBridge() {
         this.connectionLock = new ReentrantReadWriteLock();
@@ -50,18 +65,40 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     public static MTPDeviceBridge getInstance() throws IOException {
-        if (INSTANCE.deviceConns.isEmpty()) {
-            try {
-                INSTANCE.connectionLock.writeLock().lock();
-                if (INSTANCE.deviceConns.isEmpty()) {
-                    INSTANCE.refreshDeviceListUnsafe();
-                }
-            } finally {
-                INSTANCE.connectionLock.writeLock().unlock();
-            }
-        }
-
+        INSTANCE.ensureFresh();
         return INSTANCE;
+    }
+
+    /**
+     * Refreshes the connected-device view, throttled so that the underlying USB scan runs at most
+     * once per {@link #DETECT_INTERVAL_NANOS}. Picks up newly attached devices, drops disconnected
+     * ones, and reopens devices that were unplugged and replugged.
+     */
+    public void refresh() throws IOException {
+        connectionLock.writeLock().lock();
+        try {
+            reconcileDevicesUnsafe();
+            lastDetectNanos = System.nanoTime();
+            devicesDetected = true;
+        } finally {
+            connectionLock.writeLock().unlock();
+        }
+    }
+
+    private void ensureFresh() throws IOException {
+        if (devicesDetected && System.nanoTime() - lastDetectNanos < DETECT_INTERVAL_NANOS) {
+            return; // recently scanned; avoid hammering the USB bus on every operation
+        }
+        refresh();
+    }
+
+    /** Returns the live connection for {@code deviceId}, or throws if it is no longer attached. */
+    private MTPDeviceConnection requireConnection(MTPDeviceIdentifier deviceId) throws IOException {
+        var conn = deviceConns.get(deviceId);
+        if (conn == null) {
+            throw new IOException("MTP device is not connected: " + deviceId);
+        }
+        return conn;
     }
 
     public MTPFileStore getFileStore(MTPDeviceIdentifier deviceId, String path) throws IOException {
@@ -71,30 +108,33 @@ public enum MTPDeviceBridge implements Closeable {
             if (parts.length == 0) {
                 throw new IllegalArgumentException("First path part required");
             }
-            synchronized (deviceConns.get(deviceId)) {
-                return getFileStore(deviceConns.get(deviceId), parts[0]);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                return getFileStore(conn, parts[0]);
             }
         } finally {
             connectionLock.readLock().unlock();
         }
     }
 
-    public long getCapacity(MTPDeviceIdentifier deviceId, long storageId) {
+    public long getCapacity(MTPDeviceIdentifier deviceId, long storageId) throws IOException {
         connectionLock.readLock().lock();
         try {
-            synchronized (deviceConns.get(deviceId)) {
-                return getCapacity(deviceConns.get(deviceId), storageId);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                return getCapacity(conn, storageId);
             }
         } finally {
             connectionLock.readLock().unlock();
         }
     }
 
-    public long getFreeSpace(MTPDeviceIdentifier deviceId, long storageId) {
+    public long getFreeSpace(MTPDeviceIdentifier deviceId, long storageId) throws IOException {
         connectionLock.readLock().lock();
         try {
-            synchronized (deviceConns.get(deviceId)) {
-                return getFreeSpace(deviceConns.get(deviceId), storageId);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                return getFreeSpace(conn, storageId);
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -110,8 +150,9 @@ public enum MTPDeviceBridge implements Closeable {
         connectionLock.readLock().lock();
         try {
             var parts = pathParts(path);
-            synchronized (deviceConns.get(deviceId)) {
-                return resolveItemUnsafe(deviceConns.get(deviceId), parts);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                return resolveItemUnsafe(conn, parts);
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -123,8 +164,9 @@ public enum MTPDeviceBridge implements Closeable {
         connectionLock.readLock().lock();
         try {
             var parts = pathParts(path);
-            synchronized (deviceConns.get(deviceId)) {
-                return listChildrenUnsafe(deviceConns.get(deviceId), parts);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                return listChildrenUnsafe(conn, parts);
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -138,8 +180,8 @@ public enum MTPDeviceBridge implements Closeable {
             if (parts.length < 2) {
                 throw new IOException("Cannot create directory at device root or storage level: " + path);
             }
-            synchronized (deviceConns.get(deviceId)) {
-                var conn = deviceConns.get(deviceId);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
                 var libMtp = lib();
                 var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
                 if (storage == null) throw new NoSuchFileException("/" + parts[0]);
@@ -160,8 +202,8 @@ public enum MTPDeviceBridge implements Closeable {
         connectionLock.readLock().lock();
         try {
             var parts = pathParts(path);
-            synchronized (deviceConns.get(deviceId)) {
-                var conn = deviceConns.get(deviceId);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
                 lib().deleteObject(conn.deviceConn(), item.itemId());
@@ -171,16 +213,133 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
-    public byte[] getFileContent(MTPDeviceIdentifier deviceId, String path) throws IOException {
+    /**
+     * Uploads {@code localFile} to {@code path} on the device, replacing any existing file with
+     * the same name. The path must be at least {@code /Storage/file} (cannot write at the device
+     * root or storage level). Returns the new item's id.
+     */
+    public long writeFile(MTPDeviceIdentifier deviceId, String path, java.nio.file.Path localFile) throws IOException {
         connectionLock.readLock().lock();
         try {
             var parts = pathParts(path);
-            synchronized (deviceConns.get(deviceId)) {
-                var conn = deviceConns.get(deviceId);
+            if (parts.length < 2) {
+                throw new IOException("Cannot write a file at device root or storage level: " + path);
+            }
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                var libMtp = lib();
+                var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
+                if (storage == null) throw new NoSuchFileException("/" + parts[0]);
+                long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+                if (parts.length > 2) {
+                    var parentParts = Arrays.copyOf(parts, parts.length - 1);
+                    var parentItem = resolveItemUnsafe(conn, parentParts);
+                    if (parentItem.isFile()) {
+                        throw new NotDirectoryException("/" + String.join("/", parentParts));
+                    }
+                    parentId = parentItem.itemId();
+                }
+                var name = parts[parts.length - 1];
+                var existing = findChildUnsafe(conn, storage.storageId(), parentId, name);
+                if (existing != null) {
+                    if (!existing.isFile()) {
+                        throw new IOException("Target exists and is a directory: " + path);
+                    }
+                    libMtp.deleteObject(conn.deviceConn(), existing.itemId());
+                }
+                long size = java.nio.file.Files.size(localFile);
+                return libMtp.sendFile(conn.deviceConn(), localFile.toString(),
+                    name, parentId, storage.storageId(), size);
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Moves {@code sourcePath} to {@code targetPath} on the same device, combining a relocation
+     * (when the parent folder changes) with a rename (when the filename changes). Both paths must
+     * be at least {@code /Storage/name}. When {@code replace} is false and the target exists, a
+     * {@link FileAlreadyExistsException} is thrown.
+     */
+    public void move(MTPDeviceIdentifier deviceId, String sourcePath, String targetPath, boolean replace) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var srcParts = pathParts(sourcePath);
+            var tgtParts = pathParts(targetPath);
+            if (srcParts.length < 2) {
+                throw new IOException("Cannot move the device root or a storage: " + sourcePath);
+            }
+            if (tgtParts.length < 2) {
+                throw new IOException("Cannot move to the device root or storage level: " + targetPath);
+            }
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
+                var libMtp = lib();
+                var source = resolveItemUnsafe(conn, srcParts);
+
+                var tgtStorage = libMtp.findStorage(conn.deviceConn(), tgtParts[0]);
+                if (tgtStorage == null) throw new NoSuchFileException("/" + tgtParts[0]);
+                long tgtParentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+                if (tgtParts.length > 2) {
+                    var parentParts = Arrays.copyOf(tgtParts, tgtParts.length - 1);
+                    var parentItem = resolveItemUnsafe(conn, parentParts);
+                    if (parentItem.isFile()) {
+                        throw new NotDirectoryException("/" + String.join("/", parentParts));
+                    }
+                    tgtParentId = parentItem.itemId();
+                }
+
+                var tgtName = tgtParts[tgtParts.length - 1];
+                var existingTgt = findChildUnsafe(conn, tgtStorage.storageId(), tgtParentId, tgtName);
+                if (existingTgt != null) {
+                    if (existingTgt.itemId() == source.itemId()) {
+                        return; // source and target are the same object
+                    }
+                    if (!replace) throw new FileAlreadyExistsException(targetPath);
+                    if (!existingTgt.isFile() && hasChildrenUnsafe(conn, existingTgt)) {
+                        throw new DirectoryNotEmptyException(targetPath);
+                    }
+                }
+
+                // libmtp reports an inconsistent parent_id for storage-root items, so detect a pure
+                // rename by comparing parent paths rather than the reported parent handle.
+                var srcParentParts = Arrays.copyOf(srcParts, srcParts.length - 1);
+                var tgtParentParts = Arrays.copyOf(tgtParts, tgtParts.length - 1);
+                boolean sameDirectory = Arrays.equals(srcParentParts, tgtParentParts);
+
+                try {
+                    if (existingTgt != null) {
+                        libMtp.deleteObject(conn.deviceConn(), existingTgt.itemId());
+                    }
+                    if (!sameDirectory) {
+                        libMtp.moveObject(conn.deviceConn(), source.itemId(), tgtStorage.storageId(), tgtParentId);
+                    }
+                    if (!source.filename().equals(tgtName)) {
+                        libMtp.setFileName(conn.deviceConn(), source.itemId(), tgtName);
+                    }
+                } catch (IOException nativeError) {
+                    // Many devices do not implement MoveObject/SetObjectName; let the caller emulate.
+                    throw new MTPOperationUnsupportedException(
+                        "Native move failed for " + sourcePath + " -> " + targetPath, nativeError);
+                }
+            }
+        } finally {
+            connectionLock.readLock().unlock();
+        }
+    }
+
+    /** Streams the file at {@code path} on the device directly into {@code localFile}. */
+    public void getFile(MTPDeviceIdentifier deviceId, String path, java.nio.file.Path localFile) throws IOException {
+        connectionLock.readLock().lock();
+        try {
+            var parts = pathParts(path);
+            var conn = requireConnection(deviceId);
+            synchronized (conn) {
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
                 if (!item.isFile()) throw new IOException(path + " is not a file");
-                return getFileContent(conn, item.itemId());
+                lib().getFile(conn.deviceConn(), item.itemId(), localFile.toString());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -197,10 +356,60 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
-    private void refreshDeviceListUnsafe() throws IOException {
-        connectionLock.writeLock().lock();
-        closeUnsafe();
-        for (var conn : getDeviceConnections()) {
+    /**
+     * Detects currently attached raw devices and, only if the set has changed since the last scan,
+     * tears down the existing connections and reopens from scratch. When the device set is
+     * unchanged the open connections are left intact (reopening would needlessly reclaim the USB
+     * interface). Caller must hold the write lock.
+     */
+    private void reconcileDevicesUnsafe() throws IOException {
+        var libMtp = lib();
+        var detection = libMtp.detectRawDevices();
+        boolean ownsAllocation = false;
+        try {
+            var signature = signatureOf(detection);
+            if (signature.equals(lastSignature) && !deviceConns.isEmpty()) {
+                return; // nothing changed; keep the live connections
+            }
+            closeUnsafe();
+            rawDevicesAllocation = detection.allocation();
+            ownsAllocation = true;
+            openDevicesUnsafe(detection);
+            lastSignature = signature;
+        } finally {
+            if (!ownsAllocation && !MemorySegment.NULL.equals(detection.allocation())) {
+                libMtp.free(detection.allocation());
+            }
+        }
+    }
+
+    private Set<RawDeviceSignature> signatureOf(LibMTP.RawDeviceResult detection) {
+        var libMtp = lib();
+        var signature = new HashSet<RawDeviceSignature>();
+        for (int i = 0; i < detection.count(); i++) {
+            var rawDevice = libMtp.rawDeviceAt(detection.allocation(), i);
+            signature.add(new RawDeviceSignature(
+                Short.toUnsignedInt(libMtp.getVendorId(rawDevice)),
+                Short.toUnsignedInt(libMtp.getProductId(rawDevice)),
+                libMtp.getBusLocation(rawDevice),
+                Byte.toUnsignedInt(libMtp.getDevNum(rawDevice))));
+        }
+        return signature;
+    }
+
+    private void openDevicesUnsafe(LibMTP.RawDeviceResult detection) {
+        var libMtp = lib();
+        for (int i = 0; i < detection.count(); i++) {
+            var rawDevice = libMtp.rawDeviceAt(detection.allocation(), i);
+            var device = libMtp.openRawDevice(rawDevice);
+            if (MemorySegment.NULL.equals(device)) {
+                continue;
+            }
+            var serial = libMtp.getSerialNumber(device);
+            var vendorId = Short.toUnsignedInt(libMtp.getVendorId(rawDevice));
+            var productId = Short.toUnsignedInt(libMtp.getProductId(rawDevice));
+            var conn = new MTPDeviceConnection(
+                new MTPDeviceIdentifier(vendorId, productId, serial), rawDevice, device);
             deviceConns.put(conn.deviceId(), conn);
             deviceInfo.put(conn.deviceId(), getDeviceInfo(conn));
         }
@@ -217,27 +426,8 @@ public enum MTPDeviceBridge implements Closeable {
         }
         deviceInfo.clear();
         deviceConns.clear();
-    }
-
-    private MTPDeviceConnection[] getDeviceConnections() throws IOException {
-        var libMtp = lib();
-        var result = libMtp.detectRawDevices();
-        rawDevicesAllocation = result.allocation();
-
-        var connections = new ArrayList<MTPDeviceConnection>(result.count());
-        for (int i = 0; i < result.count(); i++) {
-            var rawDevice = libMtp.rawDeviceAt(result.allocation(), i);
-            var device = libMtp.openRawDevice(rawDevice);
-            if (MemorySegment.NULL.equals(device)) {
-                continue;
-            }
-            var serial = libMtp.getSerialNumber(device);
-            var vendorId = Short.toUnsignedInt(libMtp.getVendorId(rawDevice));
-            var productId = Short.toUnsignedInt(libMtp.getProductId(rawDevice));
-            connections.add(new MTPDeviceConnection(
-                new MTPDeviceIdentifier(vendorId, productId, serial), rawDevice, device));
-        }
-        return connections.toArray(new MTPDeviceConnection[0]);
+        lastSignature = Set.of();
+        devicesDetected = false;
     }
 
     private MTPDeviceInfo getDeviceInfo(MTPDeviceConnection conn) {
@@ -318,8 +508,15 @@ public enum MTPDeviceBridge implements Closeable {
         return libMtp.getChildItems(conn.deviceConn(), storageId, parentId);
     }
 
-    private byte[] getFileContent(MTPDeviceConnection conn, long itemId) throws IOException {
-        return lib().getFileContent(conn.deviceConn(), itemId);
+    /** Returns true if the given directory item contains any children. */
+    private boolean hasChildrenUnsafe(MTPDeviceConnection conn, MTPItemInfo dir) throws IOException {
+        return lib().getChildItems(conn.deviceConn(), dir.storageId(), dir.itemId()).length > 0;
+    }
+
+    /** Returns the named child of (storageId, parentId), or null if no such child exists. */
+    private MTPItemInfo findChildUnsafe(MTPDeviceConnection conn, long storageId, long parentId, String name) throws IOException {
+        var children = lib().getChildItems(conn.deviceConn(), storageId, parentId);
+        return Arrays.stream(children).filter(c -> c.filename().equals(name)).findFirst().orElse(null);
     }
 
     static String[] pathParts(String path) {

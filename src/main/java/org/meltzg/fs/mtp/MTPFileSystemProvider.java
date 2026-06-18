@@ -1,15 +1,21 @@
 package org.meltzg.fs.mtp;
 
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
+import org.meltzg.fs.mtp.types.MTPItemInfo;
 
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
+import java.nio.channels.NonReadableChannelException;
+import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
+import java.nio.file.attribute.FileTime;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -74,28 +80,95 @@ public class MTPFileSystemProvider extends FileSystemProvider {
     @Override
     public SeekableByteChannel newByteChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
         validatePathProvider(path);
+        var deviceId = ((MTPPath) path).getFileSystem().getDeviceIdentifier();
+        var absPath = path.toAbsolutePath().toString();
         if (options.contains(StandardOpenOption.WRITE) || options.contains(StandardOpenOption.APPEND)) {
-            throw new UnsupportedOperationException("MTP filesystem is read-only via byte channel");
+            return newWritableByteChannel(deviceId, absPath, options);
         }
-        var deviceIdentifier = getDeviceIdentifier(path.toUri());
-        var content = MTPDeviceBridge.getInstance().getFileContent(deviceIdentifier, path.toAbsolutePath().toString());
+        return newReadableByteChannel(deviceId, absPath);
+    }
 
-        var tempOptions = new HashSet<OpenOption>(Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE));
-        var surrogate = Files.newByteChannel(Files.createTempFile("mtp-read-", ".tmp"), tempOptions, attrs);
-        if (content != null && content.length > 0) {
-            surrogate.write(ByteBuffer.wrap(content));
-            surrogate.position(0);
+    private SeekableByteChannel newReadableByteChannel(MTPDeviceIdentifier deviceId, String absPath) throws IOException {
+        // Stream the device object straight into a local temp file (no whole-file heap buffering).
+        var tempFile = Files.createTempFile("mtp-read-", ".tmp");
+        try {
+            MTPDeviceBridge.getInstance().getFile(deviceId, absPath, tempFile);
+        } catch (IOException e) {
+            Files.deleteIfExists(tempFile);
+            throw e;
         }
+        var surrogate = Files.newByteChannel(tempFile, Set.of(StandardOpenOption.READ));
 
         return new SeekableByteChannel() {
             @Override public int read(ByteBuffer dst) throws IOException { return surrogate.read(dst); }
-            @Override public int write(ByteBuffer src) throws IOException { throw new UnsupportedOperationException(); }
+            @Override public int write(ByteBuffer src) { throw new NonWritableChannelException(); }
             @Override public long position() throws IOException { return surrogate.position(); }
             @Override public SeekableByteChannel position(long pos) throws IOException { surrogate.position(pos); return this; }
             @Override public long size() throws IOException { return surrogate.size(); }
-            @Override public SeekableByteChannel truncate(long size) throws IOException { throw new UnsupportedOperationException(); }
+            @Override public SeekableByteChannel truncate(long size) { throw new NonWritableChannelException(); }
             @Override public boolean isOpen() { return surrogate.isOpen(); }
-            @Override public void close() throws IOException { surrogate.close(); }
+            @Override public void close() throws IOException {
+                try { surrogate.close(); } finally { Files.deleteIfExists(tempFile); }
+            }
+        };
+    }
+
+    private SeekableByteChannel newWritableByteChannel(MTPDeviceIdentifier deviceId, String absPath,
+                                                       Set<? extends OpenOption> options) throws IOException {
+        var bridge = MTPDeviceBridge.getInstance();
+        // resolveItem throws NoSuchFileException when the target (or an ancestor) is absent; for a
+        // create we only care whether the target itself already exists, so treat absence as null.
+        MTPItemInfo existing;
+        try {
+            existing = bridge.resolveItem(deviceId, absPath);
+        } catch (NoSuchFileException e) {
+            existing = null;
+        }
+        if (options.contains(StandardOpenOption.CREATE_NEW) && existing != null) {
+            throw new FileAlreadyExistsException(absPath);
+        }
+        if (existing != null && !existing.isFile()) {
+            throw new FileAlreadyExistsException(absPath);
+        }
+
+        // Writes are buffered to a local temp file and uploaded to the device on close().
+        boolean append = options.contains(StandardOpenOption.APPEND);
+        boolean readable = options.contains(StandardOpenOption.READ);
+        var tempFile = Files.createTempFile("mtp-write-", ".tmp");
+        SeekableByteChannel surrogate;
+        try {
+            if (append && existing != null) {
+                bridge.getFile(deviceId, absPath, tempFile); // seed the buffer with current content
+            }
+            surrogate = Files.newByteChannel(tempFile, Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE));
+            if (append) surrogate.position(surrogate.size());
+        } catch (IOException e) {
+            Files.deleteIfExists(tempFile);
+            throw e;
+        }
+
+        return new SeekableByteChannel() {
+            private boolean closed = false;
+            @Override public int read(ByteBuffer dst) throws IOException {
+                if (!readable) throw new NonReadableChannelException();
+                return surrogate.read(dst);
+            }
+            @Override public int write(ByteBuffer src) throws IOException { return surrogate.write(src); }
+            @Override public long position() throws IOException { return surrogate.position(); }
+            @Override public SeekableByteChannel position(long pos) throws IOException { surrogate.position(pos); return this; }
+            @Override public long size() throws IOException { return surrogate.size(); }
+            @Override public SeekableByteChannel truncate(long size) throws IOException { surrogate.truncate(size); return this; }
+            @Override public boolean isOpen() { return !closed; }
+            @Override public void close() throws IOException {
+                if (closed) return;
+                closed = true;
+                try {
+                    surrogate.close();
+                    bridge.writeFile(deviceId, absPath, tempFile);
+                } finally {
+                    Files.deleteIfExists(tempFile);
+                }
+            }
         };
     }
 
@@ -114,8 +187,15 @@ public class MTPFileSystemProvider extends FileSystemProvider {
         }
 
         return new DirectoryStream<>() {
-            @Override public Iterator<Path> iterator() { return paths.iterator(); }
-            @Override public void close() {}
+            private boolean iteratorReturned = false;
+            private boolean closed = false;
+            @Override public Iterator<Path> iterator() {
+                if (closed) throw new IllegalStateException("Directory stream is closed");
+                if (iteratorReturned) throw new IllegalStateException("Iterator already obtained");
+                iteratorReturned = true;
+                return paths.iterator();
+            }
+            @Override public void close() { closed = true; }
         };
     }
 
@@ -137,12 +217,109 @@ public class MTPFileSystemProvider extends FileSystemProvider {
 
     @Override
     public void copy(Path source, Path target, CopyOption... options) throws IOException {
-        throw new UnsupportedOperationException("MTP filesystem does not support copy");
+        validatePathProvider(target);
+        boolean replace = Set.of(options).contains(StandardCopyOption.REPLACE_EXISTING);
+        if (source instanceof MTPPath src
+                && src.getFileSystem().getDeviceIdentifier().equals(((MTPPath) target).getFileSystem().getDeviceIdentifier())
+                && src.toAbsolutePath().equals(target.toAbsolutePath())) {
+            return; // copying a file to itself has no effect
+        }
+        if (Files.isDirectory(source)) {
+            // Per the NIO contract, copying a directory is non-recursive: it creates the target
+            // directory only. Recursive copies are driven by the caller via Files.walkFileTree.
+            ensureTargetDirectory(target, replace);
+            return;
+        }
+        copyFile(source, target, replace);
+    }
+
+    private void copyFile(Path source, Path target, boolean replace) throws IOException {
+        var openOpts = replace
+            ? Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
+            : Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        try (var in = Files.newInputStream(source);
+             var out = Channels.newOutputStream(newByteChannel(target, openOpts))) {
+            in.transferTo(out);
+        }
     }
 
     @Override
     public void move(Path source, Path target, CopyOption... options) throws IOException {
-        throw new UnsupportedOperationException("MTP filesystem does not support move");
+        validatePathProvider(source);
+        validatePathProvider(target);
+        var opts = Set.of(options);
+        boolean replace = opts.contains(StandardCopyOption.REPLACE_EXISTING);
+        var srcDevice = ((MTPPath) source).getFileSystem().getDeviceIdentifier();
+        var tgtDevice = ((MTPPath) target).getFileSystem().getDeviceIdentifier();
+        if (srcDevice.equals(tgtDevice)) {
+            try {
+                MTPDeviceBridge.getInstance().move(srcDevice,
+                    source.toAbsolutePath().toString(), target.toAbsolutePath().toString(), replace);
+            } catch (MTPOperationUnsupportedException e) {
+                // Device lacks native MoveObject/SetObjectName; emulate move with copy + delete.
+                if (opts.contains(StandardCopyOption.ATOMIC_MOVE)) {
+                    throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
+                        "device does not support atomic move");
+                }
+                emulateMove(source, target, replace);
+            }
+        } else {
+            // Cross-device move cannot be atomic; fall back to copy + delete.
+            if (opts.contains(StandardCopyOption.ATOMIC_MOVE)) {
+                throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
+                    "atomic move across devices is not supported");
+            }
+            emulateMove(source, target, replace);
+        }
+    }
+
+    /**
+     * Emulates a move with copy + delete when the device cannot perform it natively. Per the
+     * {@link java.nio.file.Files#move} contract this is non-recursive: moving a non-empty directory
+     * would require relocating its entries, which this method refuses with
+     * {@link DirectoryNotEmptyException}. Callers that want to move a tree should use
+     * {@link java.nio.file.Files#walkFileTree} together with {@link #copy}.
+     */
+    private void emulateMove(Path source, Path target, boolean replace) throws IOException {
+        if (Files.isDirectory(source)) {
+            if (!isEmptyDirectory(source)) {
+                throw new DirectoryNotEmptyException(source.toString());
+            }
+            ensureTargetDirectory(target, replace);
+            delete(source);
+        } else {
+            copyFile(source, target, replace);
+            delete(source);
+        }
+    }
+
+    private boolean isEmptyDirectory(Path dir) throws IOException {
+        try (var children = newDirectoryStream(dir, p -> true)) {
+            return !children.iterator().hasNext();
+        }
+    }
+
+    /** Creates {@code dir}, applying NIO target-replacement rules to anything already present. */
+    private void ensureTargetDirectory(Path dir, boolean replace) throws IOException {
+        var deviceId = ((MTPPath) dir).getFileSystem().getDeviceIdentifier();
+        MTPItemInfo existing;
+        try {
+            existing = MTPDeviceBridge.getInstance().resolveItem(deviceId, dir.toAbsolutePath().toString());
+        } catch (NoSuchFileException e) {
+            existing = null;
+        }
+        if (existing == null) {
+            createDirectory(dir);
+            return;
+        }
+        if (!replace) {
+            throw new FileAlreadyExistsException(dir.toString());
+        }
+        if (!existing.isFile() && !isEmptyDirectory(dir)) {
+            throw new DirectoryNotEmptyException(dir.toString());
+        }
+        delete(dir);
+        createDirectory(dir);
     }
 
     @Override
@@ -178,14 +355,28 @@ public class MTPFileSystemProvider extends FileSystemProvider {
             }
         }
         for (var mode : modes) {
-            if (mode == AccessMode.WRITE || mode == AccessMode.EXECUTE) {
+            if (mode == AccessMode.EXECUTE) {
                 throw new AccessDeniedException(absPath);
             }
         }
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public <V extends FileAttributeView> V getFileAttributeView(Path path, Class<V> type, LinkOption... options) {
+        validatePathProvider(path);
+        if (type == null) throw new NullPointerException();
+        if (type.isAssignableFrom(BasicFileAttributeView.class)) {
+            return (V) new BasicFileAttributeView() {
+                @Override public String name() { return "basic"; }
+                @Override public BasicFileAttributes readAttributes() throws IOException {
+                    return MTPFileSystemProvider.this.readAttributes(path, BasicFileAttributes.class, options);
+                }
+                @Override public void setTimes(FileTime lastModifiedTime, FileTime lastAccessTime, FileTime createTime) {
+                    throw new UnsupportedOperationException("MTP filesystem does not support setting file times");
+                }
+            };
+        }
         return null;
     }
 
@@ -209,29 +400,49 @@ public class MTPFileSystemProvider extends FileSystemProvider {
         return (A) new MTPBasicFileAttributes(item);
     }
 
+    private static final Set<String> BASIC_ATTRIBUTE_NAMES = Set.of(
+        "lastModifiedTime", "lastAccessTime", "creationTime", "isRegularFile",
+        "isDirectory", "isSymbolicLink", "isOther", "size", "fileKey");
+
     @Override
     public Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options) throws IOException {
-        var attrs = readAttributes(path, BasicFileAttributes.class, options);
+        if (attributes == null) throw new NullPointerException();
         String view = "basic";
         String keys = attributes;
-        if (attributes.contains(":")) {
-            var parts = attributes.split(":", 2);
-            view = parts[0];
-            keys = parts[1];
+        int colon = attributes.indexOf(':');
+        if (colon >= 0) {
+            view = attributes.substring(0, colon);
+            keys = attributes.substring(colon + 1);
         }
         if (!view.equals("basic")) throw new UnsupportedOperationException("View not supported: " + view);
+        if (keys.isEmpty()) throw new IllegalArgumentException("No attributes specified");
+
+        List<String> requested;
+        if (keys.equals("*")) {
+            requested = new ArrayList<>(BASIC_ATTRIBUTE_NAMES);
+        } else {
+            requested = Arrays.asList(keys.split(","));
+            for (var name : requested) {
+                if (!BASIC_ATTRIBUTE_NAMES.contains(name)) {
+                    throw new IllegalArgumentException("'" + name + "' not recognized");
+                }
+            }
+        }
+
+        var attrs = readAttributes(path, BasicFileAttributes.class, options);
+        Map<String, Object> all = new HashMap<>();
+        all.put("lastModifiedTime", attrs.lastModifiedTime());
+        all.put("lastAccessTime",   attrs.lastAccessTime());
+        all.put("creationTime",     attrs.creationTime());
+        all.put("isRegularFile",    attrs.isRegularFile());
+        all.put("isDirectory",      attrs.isDirectory());
+        all.put("isSymbolicLink",   attrs.isSymbolicLink());
+        all.put("isOther",          attrs.isOther());
+        all.put("size",             attrs.size());
+        all.put("fileKey",          attrs.fileKey());
 
         Map<String, Object> result = new HashMap<>();
-        var all = keys.equals("*");
-        if (all || keys.contains("lastModifiedTime")) result.put("lastModifiedTime", attrs.lastModifiedTime());
-        if (all || keys.contains("lastAccessTime"))   result.put("lastAccessTime",   attrs.lastAccessTime());
-        if (all || keys.contains("creationTime"))     result.put("creationTime",     attrs.creationTime());
-        if (all || keys.contains("isRegularFile"))    result.put("isRegularFile",    attrs.isRegularFile());
-        if (all || keys.contains("isDirectory"))      result.put("isDirectory",      attrs.isDirectory());
-        if (all || keys.contains("isSymbolicLink"))   result.put("isSymbolicLink",   attrs.isSymbolicLink());
-        if (all || keys.contains("isOther"))          result.put("isOther",          attrs.isOther());
-        if (all || keys.contains("size"))             result.put("size",             attrs.size());
-        if (all || keys.contains("fileKey"))          result.put("fileKey",          attrs.fileKey());
+        for (var name : requested) result.put(name, all.get(name));
         return result;
     }
 

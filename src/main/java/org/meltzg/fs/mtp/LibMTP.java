@@ -12,6 +12,8 @@ interface LibMTP {
     int LIBMTP_ERROR_NO_DEVICE_ATTACHED = 5;
     int LIBMTP_FILES_AND_FOLDERS_ROOT = 0xFFFFFFFF;
     int LIBMTP_FILETYPE_FOLDER = 0;
+    // Neutral "generic file" type; index of LIBMTP_FILETYPE_UNKNOWN in libmtp 1.1.x's enum.
+    int LIBMTP_FILETYPE_UNKNOWN = 44;
 
     record RawDeviceResult(MemorySegment allocation, int count) {}
 
@@ -53,7 +55,21 @@ interface LibMTP {
 
     void deleteObject(MemorySegment device, long itemId) throws IOException;
 
-    byte[] getFileContent(MemorySegment device, long itemId) throws IOException;
+    /** Streams the device object {@code itemId} directly to the local file {@code destPath}. */
+    void getFile(MemorySegment device, long itemId, String destPath) throws IOException;
+
+    /**
+     * Uploads {@code localPath} to the device as a new file named {@code filename} under
+     * {@code parentId} on {@code storageId}. Returns the new item's id.
+     */
+    long sendFile(MemorySegment device, String localPath, String filename,
+                  long parentId, long storageId, long filesize) throws IOException;
+
+    /** Relocates an object to a new {@code parentId} on {@code storageId}, keeping its id. */
+    void moveObject(MemorySegment device, long itemId, long storageId, long parentId) throws IOException;
+
+    /** Renames an object in place. */
+    void setFileName(MemorySegment device, long itemId, String newName) throws IOException;
 
     void releaseDevice(MemorySegment device);
 

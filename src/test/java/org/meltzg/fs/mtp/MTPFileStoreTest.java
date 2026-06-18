@@ -42,4 +42,16 @@ public class MTPFileStoreTest {
         assertTrue(fileStore.getUsableSpace() > 0);
         assertTrue(fileStore.getUsableSpace() <= fileStore.getTotalSpace());
     }
+
+    @Test
+    public void getAttributeReturnsSpaceValues() throws IOException {
+        assertEquals(fileStore.getTotalSpace(), fileStore.getAttribute("totalSpace"));
+        assertEquals(fileStore.getUsableSpace(), fileStore.getAttribute("usableSpace"));
+        assertEquals(fileStore.getUnallocatedSpace(), fileStore.getAttribute("unallocatedSpace"));
+    }
+
+    @Test(expected = UnsupportedOperationException.class)
+    public void getAttributeUnknownThrows() throws IOException {
+        fileStore.getAttribute("bogus");
+    }
 }

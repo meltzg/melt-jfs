@@ -66,7 +66,12 @@ public class MTPFileStore extends FileStore {
 
     @Override
     public Object getAttribute(String attribute) throws IOException {
-        return null;
+        return switch (attribute) {
+            case "totalSpace" -> getTotalSpace();
+            case "usableSpace" -> getUsableSpace();
+            case "unallocatedSpace" -> getUnallocatedSpace();
+            default -> throw new UnsupportedOperationException("Attribute not supported: " + attribute);
+        };
     }
 
     @Override

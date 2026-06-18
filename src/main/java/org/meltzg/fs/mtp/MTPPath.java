@@ -99,7 +99,12 @@ public class MTPPath implements Path {
             if (part.equals(".")) {
                 // skip
             } else if (part.equals("..")) {
-                if (!normalized.isEmpty()) normalized.removeLast();
+                if (!normalized.isEmpty() && !normalized.peekLast().equals("..")) {
+                    normalized.removeLast();
+                } else if (!isAbsolute()) {
+                    // Relative paths keep leading ".."; absolute paths cannot go above root.
+                    normalized.addLast("..");
+                }
             } else {
                 normalized.addLast(part);
             }
@@ -143,8 +148,12 @@ public class MTPPath implements Path {
     public URI toUri() {
         try {
             var absolutePath = ((MTPPath) toAbsolutePath()).toString(false);
+            // Percent-encode characters that are illegal in a URI path (e.g. spaces in device
+            // names). Letting URI encode the path avoids URISyntaxException and round-trips back
+            // through getSchemeSpecificPart() in the provider.
+            var encodedPath = new URI(null, null, absolutePath, null).getRawPath();
             return new URI(String.format("%s://%s%s",
-                fileSystem.provider().getScheme(), fileSystem.getDeviceIdentifier(), absolutePath));
+                fileSystem.provider().getScheme(), fileSystem.getDeviceIdentifier(), encodedPath));
         } catch (URISyntaxException e) {
             throw new IllegalStateException("Cannot convert path to URI: " + path, e);
         }
@@ -158,7 +167,13 @@ public class MTPPath implements Path {
 
     @Override
     public Path toRealPath(LinkOption... options) throws IOException {
-        return toAbsolutePath().normalize();
+        var real = (MTPPath) toAbsolutePath().normalize();
+        var absStr = real.toString();
+        if (!absStr.equals("/")) {
+            // resolveItem throws NoSuchFileException when the path does not exist.
+            MTPDeviceBridge.getInstance().resolveItem(fileSystem.getDeviceIdentifier(), absStr);
+        }
+        return real;
     }
 
     @Override

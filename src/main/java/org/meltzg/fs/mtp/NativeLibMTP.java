@@ -6,8 +6,6 @@ import java.io.IOException;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -120,8 +118,11 @@ class NativeLibMTP implements LibMTP {
     private final MethodHandle getManufacturerName;
     private final MethodHandle getFilesAndFolders;
     private final MethodHandle getFileToFile;
+    private final MethodHandle sendFileFromFile;
     private final MethodHandle destroyFile;
     private final MethodHandle createFolderFn;
+    private final MethodHandle moveObjectFn;
+    private final MethodHandle setFileNameFn;
     private final MethodHandle deleteObjectFn;
     private final MethodHandle freeFn;
 
@@ -155,10 +156,16 @@ class NativeLibMTP implements LibMTP {
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
         getFileToFile = bind(linker, libmtp, "LIBMTP_Get_File_To_File",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+        sendFileFromFile = bind(linker, libmtp, "LIBMTP_Send_File_From_File",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
         destroyFile = bind(linker, libmtp, "LIBMTP_destroy_file_t",
             FunctionDescriptor.ofVoid(ADDRESS));
         createFolderFn = bind(linker, libmtp, "LIBMTP_Create_Folder",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
+        moveObjectFn = bind(linker, libmtp, "LIBMTP_Move_Object",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT));
+        setFileNameFn = bind(linker, libmtp, "LIBMTP_Set_File_Name",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
         deleteObjectFn = bind(linker, libmtp, "LIBMTP_Delete_Object",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
         freeFn = linker.downcallHandle(
@@ -365,10 +372,9 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public byte[] getFileContent(MemorySegment device, long itemId) throws IOException {
-        Path tempFile = Files.createTempFile("mtp-", ".tmp");
+    public void getFile(MemorySegment device, long itemId, String destPath) throws IOException {
         try (var arena = Arena.ofConfined()) {
-            var pathSeg = arena.allocateUtf8String(tempFile.toString());
+            var pathSeg = arena.allocateUtf8String(destPath);
             int ret;
             try {
                 ret = (int) getFileToFile.invokeExact(
@@ -379,9 +385,63 @@ class NativeLibMTP implements LibMTP {
             if (ret != 0) {
                 throw new IOException("LIBMTP_Get_File_To_File failed with code " + ret);
             }
-            return Files.readAllBytes(tempFile);
-        } finally {
-            Files.deleteIfExists(tempFile);
+        }
+    }
+
+    @Override
+    public long sendFile(MemorySegment device, String localPath, String filename,
+                         long parentId, long storageId, long filesize) throws IOException {
+        try (var arena = Arena.ofConfined()) {
+            // Arena.allocate zero-fills, so item_id, padding and next are 0/NULL.
+            var fileData = arena.allocate(FILE_LAYOUT);
+            FILE_PARENT_ID.set(fileData, (int) parentId);
+            FILE_STORAGE_ID.set(fileData, (int) storageId);
+            FILE_FILENAME.set(fileData, arena.allocateUtf8String(filename));
+            FILE_FILESIZE.set(fileData, filesize);
+            FILE_FILETYPE.set(fileData, LIBMTP_FILETYPE_UNKNOWN);
+
+            var pathSeg = arena.allocateUtf8String(localPath);
+            int ret;
+            try {
+                ret = (int) sendFileFromFile.invokeExact(
+                    device, pathSeg, fileData, MemorySegment.NULL, MemorySegment.NULL);
+            } catch (Throwable t) {
+                throw new IOException("Failed to send file to device", t);
+            }
+            if (ret != 0) {
+                throw new IOException("LIBMTP_Send_File_From_File failed with code " + ret + " for: " + filename);
+            }
+            return Integer.toUnsignedLong((int) FILE_ITEM_ID.get(fileData));
+        }
+    }
+
+    @Override
+    public void moveObject(MemorySegment device, long itemId, long storageId, long parentId) throws IOException {
+        try {
+            int ret = (int) moveObjectFn.invokeExact(device, (int) itemId, (int) storageId, (int) parentId);
+            if (ret != 0) throw new IOException("LIBMTP_Move_Object failed with code " + ret + " for id: " + itemId);
+        } catch (IOException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IOException("Failed to move object: " + itemId, t);
+        }
+    }
+
+    @Override
+    public void setFileName(MemorySegment device, long itemId, String newName) throws IOException {
+        try (var arena = Arena.ofConfined()) {
+            // Set_File_Name only reads filedata->item_id; the rest is zero-filled by allocate.
+            var fileData = arena.allocate(FILE_LAYOUT);
+            FILE_ITEM_ID.set(fileData, (int) itemId);
+            FILE_FILETYPE.set(fileData, LIBMTP_FILETYPE_UNKNOWN);
+            var nameSeg = arena.allocateUtf8String(newName);
+            int ret;
+            try {
+                ret = (int) setFileNameFn.invokeExact(device, fileData, nameSeg);
+            } catch (Throwable t) {
+                throw new IOException("Failed to rename object on device", t);
+            }
+            if (ret != 0) throw new IOException("LIBMTP_Set_File_Name failed with code " + ret + " for id: " + itemId);
         }
     }
 

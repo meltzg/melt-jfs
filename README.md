@@ -35,11 +35,14 @@ The unit tests use a `FakeLibMTP` test double — no physical device and no nati
 
 ### Testing against a real device (local only)
 
-Integration against an actual MTP device requires `libmtp9` installed and the device connected. The `MTPDeviceBridgeIntegrationTest` class skips automatically when no device is accessible.
+Integration tests live in a separate `integrationTest` source set and run via their own task, in a
+fresh JVM per test class (`forkEvery = 1`) so they never share `libmtp`/device state with the
+fake-backed unit tests. They require `libmtp9` installed and the device connected, and skip
+automatically when no device is accessible. They are not part of `test`/`check`.
 
 ```bash
 # Connect the device, eject it from the file manager (so GVFS releases the USB interface), then:
-./gradlew test --tests '*IntegrationTest*'
+./gradlew integrationTest
 ```
 
 ## Browsing a connected device
@@ -68,9 +71,12 @@ src/
   test/java/org/meltzg/fs/mtp/
     FakeLibMTP.java              # In-memory LibMTP test double (no native libs)
     MTPDeviceBridgeTest.java     # Unit tests using FakeLibMTP
+    MTPDeviceBridgeFreshnessTest.java    # Hot-plug/unplug detection (FakeLibMTP)
     MTPFileStoreTest.java        # Unit tests using FakeLibMTP
     MTPFileSystemProviderTest.java
-    MTPDeviceBridgeIntegrationTest.java  # Real-device tests (skipped when no device)
+  integrationTest/java/org/meltzg/fs/mtp/  # Real-device tests (own JVM; skipped when no device)
+    MTPDeviceBridgeIntegrationTest.java
+    MTPFileSystemIntegrationTest.java
 ```
 
 ## Architecture notes

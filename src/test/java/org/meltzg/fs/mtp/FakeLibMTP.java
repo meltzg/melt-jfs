@@ -28,9 +28,14 @@ class FakeLibMTP implements LibMTP {
     private static final MemorySegment FAKE_RAW_DEVICE = MemorySegment.ofArray(new long[1]);
     private static final MemorySegment FAKE_DEVICE = MemorySegment.ofArray(new long[1]);
 
+    // Tests toggle this to simulate the device being unplugged/replugged.
+    volatile boolean devicePresent = true;
+
     @Override
     public RawDeviceResult detectRawDevices() throws IOException {
-        return new RawDeviceResult(FAKE_ALLOCATION, 1);
+        return devicePresent
+            ? new RawDeviceResult(FAKE_ALLOCATION, 1)
+            : new RawDeviceResult(MemorySegment.NULL, 0);
     }
 
     @Override
@@ -120,9 +125,21 @@ class FakeLibMTP implements LibMTP {
     public void deleteObject(MemorySegment device, long itemId) throws IOException {}
 
     @Override
-    public byte[] getFileContent(MemorySegment device, long itemId) throws IOException {
-        return new byte[0];
+    public void getFile(MemorySegment device, long itemId, String destPath) throws IOException {
+        // No content in the in-memory fake; leave destPath as the (empty) temp file.
     }
+
+    @Override
+    public long sendFile(MemorySegment device, String localPath, String filename,
+                         long parentId, long storageId, long filesize) throws IOException {
+        return 1L;
+    }
+
+    @Override
+    public void moveObject(MemorySegment device, long itemId, long storageId, long parentId) throws IOException {}
+
+    @Override
+    public void setFileName(MemorySegment device, long itemId, String newName) throws IOException {}
 
     @Override
     public void releaseDevice(MemorySegment device) {}

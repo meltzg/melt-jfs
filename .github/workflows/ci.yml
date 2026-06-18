@@ -17,19 +17,13 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Install system libraries
-        run: |
-          sudo apt-get update -q
-          # libmtp9       — libmtp.so.9  (MTP device access)
-          # libglib2.0-0  — libgobject-2.0.so.0 (GLib, required by libumockdev)
-          # libumockdev0  — libumockdev.so.0 (loaded by UMockdevTestbed)
-          # umockdev      — libumockdev-preload.so.0 + umockdev-record (LD_PRELOAD for tests)
-          sudo apt-get install -y libmtp9 libglib2.0-0 libumockdev0 umockdev
-
       - uses: gradle/actions/setup-gradle@v3
 
-      - name: Run tests
-        run: ./gradlew test
+      # The unit tests inject a FakeLibMTP and never load native libmtp, so no system libraries are
+      # needed. Integration tests require a physically connected device, so they are not run here;
+      # we compile them (integrationTestClasses) only to ensure they don't bit-rot.
+      - name: Run unit tests and compile integration tests
+        run: ./gradlew test integrationTestClasses
 
       - name: Upload test report
         if: failure()

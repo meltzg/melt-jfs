@@ -3,12 +3,9 @@ plugins {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
-
-tasks.withType<JavaCompile>().configureEach {
-    options.compilerArgs.add("--enable-preview")
+    // FFM (java.lang.foreign) was finalized in Java 22, so no --enable-preview is needed.
+    sourceCompatibility = JavaVersion.VERSION_22
+    targetCompatibility = JavaVersion.VERSION_22
 }
 
 repositories {
@@ -37,21 +34,17 @@ val integrationTest by sourceSets.creating {
     runtimeClasspath += sourceSets.main.get().output + configurations["testRuntimeClasspath"]
 }
 
-tasks.named<JavaCompile>("compileDevJava") {
-    options.compilerArgs.add("--enable-preview")
-}
-
 tasks.register<JavaExec>("browse") {
     description = "Walk and print the directory tree of all connected MTP devices."
     classpath = dev.runtimeClasspath
     mainClass = "org.meltzg.fs.mtp.MTPBrowser"
-    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
     // pass an optional depth limit: ./gradlew browse --args="2"
 }
 
 tasks.test {
     // Required for FFM restricted operations (MemorySegment.reinterpret, libraryLookup)
-    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 tasks.register<Test>("integrationTest") {
@@ -62,6 +55,6 @@ tasks.register<Test>("integrationTest") {
     // Fresh JVM per test class: isolates native libmtp + device-connection state between classes.
     forkEvery = 1
     maxParallelForks = 1
-    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
     shouldRunAfter(tasks.test)
 }

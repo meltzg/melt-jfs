@@ -20,8 +20,8 @@ public class MTPDeviceBridgeIntegrationTest {
 
     @Before
     public void requireRealDevice() throws IOException {
+        assumeTrue("native MTP backend not available", isBackendAvailable());
         System.out.println("Running MTPDeviceBridgeIntegrationTest: " + MTPDeviceBridge.getInstance().getDeviceConns());
-        assumeTrue("libmtp not available", isNativeLibAvailable());
         MTPDeviceBridge.INSTANCE.close();
         assumeTrue("No MTP device connected",
             !MTPDeviceBridge.getInstance().getDeviceConns().isEmpty());
@@ -51,9 +51,10 @@ public class MTPDeviceBridgeIntegrationTest {
         }
     }
 
-    private static boolean isNativeLibAvailable() {
+    private static boolean isBackendAvailable() {
         try {
-            NativeLibMTP.getInstance();
+            // Loads the platform's native backend: libmtp on Linux/macOS, WPD (ole32) on Windows.
+            MtpBackend.defaultBackend();
             return true;
         } catch (Throwable t) {
             return false;

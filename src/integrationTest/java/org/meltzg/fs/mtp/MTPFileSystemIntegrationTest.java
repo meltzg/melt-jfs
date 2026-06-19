@@ -32,7 +32,7 @@ public class MTPFileSystemIntegrationTest {
 
     @Before
     public void setUp() throws IOException {
-        assumeTrue("libmtp not available", isNativeLibAvailable());
+        assumeTrue("native MTP backend not available", isBackendAvailable());
         MTPDeviceBridge.INSTANCE.close();
         var bridge = MTPDeviceBridge.getInstance();
         assumeTrue("No MTP device connected", !bridge.getDeviceConns().isEmpty());
@@ -525,9 +525,10 @@ public class MTPFileSystemIntegrationTest {
         return null;
     }
 
-    private static boolean isNativeLibAvailable() {
+    private static boolean isBackendAvailable() {
         try {
-            NativeLibMTP.getInstance();
+            // Loads the platform's native backend: libmtp on Linux/macOS, WPD (ole32) on Windows.
+            MtpBackend.defaultBackend();
             return true;
         } catch (Throwable t) {
             return false;

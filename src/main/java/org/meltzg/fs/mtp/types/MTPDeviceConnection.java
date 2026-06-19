@@ -1,6 +1,7 @@
 package org.meltzg.fs.mtp.types;
 
-import java.lang.foreign.MemorySegment;
+import org.meltzg.fs.mtp.MtpBackend;
 
-public record MTPDeviceConnection(MTPDeviceIdentifier deviceId, MemorySegment rawDeviceConn, MemorySegment deviceConn) {
+/** A live, opened connection to one device: its stable identity plus an opaque backend handle. */
+public record MTPDeviceConnection(MTPDeviceIdentifier deviceId, MtpBackend.DeviceHandle handle) {
 }

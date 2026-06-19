@@ -2,6 +2,15 @@
 
 A Java NIO `FileSystemProvider` implementation for MTP (Media Transfer Protocol) devices such as Android phones and dedicated audio players. Uses the Java Foreign Function & Memory (FFM) API (Project Panama) instead of JNI, so no native build step is required.
 
+Two backends are selected automatically by platform:
+
+| Platform | Backend | Native dependency |
+|----------|---------|-------------------|
+| Linux / macOS | libmtp (`NativeLibMTP`) | `libmtp.so.9` |
+| Windows | Windows Portable Devices COM (`WpdBackend`) | `ole32` + WPD (built into Windows) |
+
+The Windows backend drives the WPD COM API entirely through FFM, so it works with the in-box MTP driver — no driver replacement (e.g. WinUSB/Zadig) and no libmtp install required.
+
 ## Requirements
 
 - **Java 21** (FFM is finalized in 21; `--enable-native-access=ALL-UNNAMED` is set automatically by the build)
@@ -18,6 +27,11 @@ sudo apt install libmtp9
 | Library | Package | Purpose |
 |---------|---------|---------|
 | `libmtp.so.9` | `libmtp9` | MTP device communication |
+
+## System libraries (Windows)
+
+Nothing to install — the `WpdBackend` talks to the Windows Portable Devices COM API via `ole32.dll`,
+which ships with Windows. The device must be in **MTP mode** and visible in File Explorer.
 
 ## Building
 
@@ -63,13 +77,15 @@ src/
     MTPFileStore.java            # FileStore (per storage volume)
     MTPBasicFileAttributes.java  # BasicFileAttributes wrapper
     MTPDeviceBridge.java         # Thread-safe device access singleton
-    LibMTP.java                  # LibMTP interface (methods + constants + nested records)
-    NativeLibMTP.java            # FFM bindings for libmtp (implements LibMTP)
-    types/                       # Value types (Lombok @Value)
+    MtpBackend.java              # Platform-neutral backend SPI (opaque String ids + device handles)
+    NativeLibMTP.java            # FFM bindings for libmtp (implements MtpBackend; Linux/macOS)
+    WpdBackend.java              # WPD COM backend via FFM (implements MtpBackend; Windows)
+    WpdCom.java                  # Low-level COM/FFM plumbing used by WpdBackend
+    types/                       # Value records
   dev/java/org/meltzg/fs/mtp/
     MTPBrowser.java              # CLI tree walker (not included in the published JAR)
   test/java/org/meltzg/fs/mtp/
-    FakeLibMTP.java              # In-memory LibMTP test double (no native libs)
+    FakeLibMTP.java              # In-memory MtpBackend test double (no native libs)
     MTPDeviceBridgeTest.java     # Unit tests using FakeLibMTP
     MTPDeviceBridgeFreshnessTest.java    # Hot-plug/unplug detection (FakeLibMTP)
     MTPFileStoreTest.java        # Unit tests using FakeLibMTP
@@ -79,17 +95,152 @@ src/
     MTPFileSystemIntegrationTest.java
 ```
 
+## URI schema
+
+All MTP paths are addressed with URIs of the form:
+
+```
+mtp://<vendorId>:<productId>:<serial>/<storage>/<path...>
+```
+
+| Component | Description | Example |
+|-----------|-------------|---------|
+| `vendorId` | USB vendor ID (decimal) | `1949` |
+| `productId` | USB product ID (decimal) | `3`    |
+| `serial`   | Device serial string    | `ABC12345` |
+| `storage`  | Storage volume name     | `Internal Storage` |
+| `path`     | Path within the storage | `Music/song.mp3` |
+
+The path hierarchy mirrors the device structure:
+
+```
+mtp://1949:3:ABC12345/               ← device root (lists storages)
+mtp://1949:3:ABC12345/Internal Storage/          ← storage volume
+mtp://1949:3:ABC12345/Internal Storage/Music/    ← directory
+mtp://1949:3:ABC12345/Internal Storage/Music/song.mp3   ← file
+```
+
+Names containing spaces or other special characters are percent-encoded in the URI (e.g. `Internal%20Storage`), but `Path.toString()` always returns the decoded form.
+
+## Using melt-jfs in a Java program
+
+### 1. Find connected devices
+
+`MTPDeviceBridge` maintains the live device list. Call it once to enumerate what is attached:
+
+```java
+import org.meltzg.fs.mtp.MTPDeviceBridge;
+import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
+import org.meltzg.fs.mtp.types.MTPDeviceInfo;
+
+MTPDeviceBridge bridge = MTPDeviceBridge.getInstance();
+
+Map<MTPDeviceIdentifier, MTPDeviceInfo> devices = bridge.getDeviceInfo();
+for (var entry : devices.entrySet()) {
+    MTPDeviceIdentifier id = entry.getKey(); // "1949:3:ABC12345"
+    MTPDeviceInfo info    = entry.getValue();
+    System.out.println(id + " → " + info.friendlyName());
+}
+```
+
+### 2. Open a FileSystem
+
+Pass the device identifier in the URI. `FileSystems.newFileSystem` registers the filesystem for subsequent `Paths.get` calls.
+
+```java
+import java.net.URI;
+import java.nio.file.FileSystems;
+import java.nio.file.FileSystem;
+
+MTPDeviceIdentifier id = bridge.getDeviceConns().keySet().iterator().next();
+URI uri = URI.create("mtp://" + id + "/");
+
+try (FileSystem fs = FileSystems.newFileSystem(uri, null)) {
+    // use fs here
+}
+```
+
+### 3. Use standard NIO operations
+
+Once the filesystem is open, every `java.nio.file.Files` method works as-is — no MTP-specific API needed.
+
+**List storages and browse directories**
+
+```java
+Path root = fs.getPath("/");
+
+// List storage volumes
+try (DirectoryStream<Path> storages = Files.newDirectoryStream(root)) {
+    for (Path storage : storages) {
+        System.out.println(storage); // e.g. /Internal Storage
+    }
+}
+
+// Walk the whole device tree
+Files.walk(root).forEach(System.out::println);
+```
+
+**Read a file**
+
+```java
+Path song = fs.getPath("/Internal Storage/Music/song.mp3");
+byte[] bytes = Files.readAllBytes(song);
+```
+
+**Write a file**
+
+```java
+Path dest = fs.getPath("/Internal Storage/Notes/hello.txt");
+Files.write(dest, "hello".getBytes());
+```
+
+**Copy between a local path and the device**
+
+```java
+Path localFile  = Path.of("/tmp/photo.jpg");
+Path deviceFile = fs.getPath("/Internal Storage/DCIM/photo.jpg");
+
+// local → device
+Files.copy(localFile, deviceFile);
+
+// device → local
+Files.copy(deviceFile, Path.of("/tmp/copy.jpg"));
+```
+
+**Delete, move, create directories**
+
+```java
+Files.createDirectory(fs.getPath("/Internal Storage/NewFolder"));
+Files.move(deviceFile, fs.getPath("/Internal Storage/NewFolder/photo.jpg"));
+Files.delete(fs.getPath("/Internal Storage/NewFolder/photo.jpg"));
+```
+
+### JVM flags
+
+The FFM API requires the following flag, which the Gradle build sets automatically. If you invoke the JVM directly, add:
+
+```
+--enable-native-access=ALL-UNNAMED
+```
+
 ## Architecture notes
 
-### LibMTP injection
+### Backend selection & injection
 
-`MTPDeviceBridge` routes all native calls through a static `lib()` accessor. Tests inject a `FakeLibMTP` via `MTPDeviceBridge.setLibMTP(...)` in `@BeforeClass` and reset it to `null` in `@AfterClass`. When the override is `null`, the bridge falls through to `NativeLibMTP.getInstance()`, which loads `libmtp.so.9` on first use.
+`MTPDeviceBridge` routes all device calls through a static `backend()` accessor. Tests inject a `FakeLibMTP` via `MTPDeviceBridge.setBackend(...)` in `@BeforeClass` and reset it to `null` in `@AfterClass`. When the override is `null`, the bridge falls through to `MtpBackend.defaultBackend()`, which picks the native backend for the current OS on first use.
 
 ```
-MTPDeviceBridge.lib()
-  ├── libOverride != null  →  FakeLibMTP   (tests)
-  └── libOverride == null  →  NativeLibMTP (production / real-device tests)
+MTPDeviceBridge.backend()
+  ├── backendOverride != null  →  FakeLibMTP                (tests)
+  └── backendOverride == null  →  MtpBackend.defaultBackend()
+        ├── Windows  →  WpdBackend   (WPD COM via FFM; loads ole32)
+        └── otherwise →  NativeLibMTP (libmtp; loads libmtp.so.9)
 ```
+
+`MtpBackend` is the platform-neutral SPI: object identifiers (storage / item / parent) are opaque
+`String`s — libmtp's 32-bit handles rendered as unsigned decimals, or WPD object-id strings verbatim —
+and device handles are opaque per-backend types. `MtpBackend.ROOT_PARENT` denotes a storage's top
+level (libmtp `0xFFFFFFFF`; the storage's functional-object id on WPD).
 
 ### FFM struct layouts
 

@@ -1,5 +1,7 @@
 package org.meltzg.fs.mtp;
 
+import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
+import org.meltzg.fs.mtp.types.MTPDeviceInfo;
 import org.meltzg.fs.mtp.types.MTPItemInfo;
 
 import java.io.IOException;
@@ -16,8 +18,21 @@ import static java.lang.foreign.ValueLayout.*;
 /**
  * FFM bindings for libmtp. Struct layouts are defined for libmtp 1.1.x on x86-64 Linux.
  * For other platforms, use jextract against the installed libmtp.h to regenerate layouts.
+ *
+ * <p>libmtp's 32-bit object handles are exposed through the {@link MtpBackend} contract as
+ * unsigned-decimal strings; {@link MtpBackend#ROOT_PARENT} maps to libmtp's {@code 0xFFFFFFFF}.
  */
-class NativeLibMTP implements LibMTP {
+class NativeLibMTP implements MtpBackend {
+
+    static final int LIBMTP_ERROR_NONE = 0;
+    static final int LIBMTP_ERROR_NO_DEVICE_ATTACHED = 5;
+    static final int LIBMTP_FILES_AND_FOLDERS_ROOT = 0xFFFFFFFF;
+    static final int LIBMTP_FILETYPE_FOLDER = 0;
+    // Neutral "generic file" type; index of LIBMTP_FILETYPE_UNKNOWN in libmtp 1.1.x's enum.
+    static final int LIBMTP_FILETYPE_UNKNOWN = 44;
+
+    /** Live libmtp handle: the opened device plus the raw-device slice it was opened from. */
+    private record LibMtpDevice(MemorySegment rawDevice, MemorySegment device) implements DeviceHandle {}
 
     // Offset of `storage` in LIBMTP_mtpdevice_t:
     //   uint8_t(1) + pad(7) + void*(8) + void*(8) = 24
@@ -192,8 +207,24 @@ class NativeLibMTP implements LibMTP {
             desc);
     }
 
+    // ---- Object-id translation between libmtp's 32-bit handles and opaque strings ----
+
+    private static int toHandle(String id) {
+        return id.equals(ROOT_PARENT) ? LIBMTP_FILES_AND_FOLDERS_ROOT : Integer.parseUnsignedInt(id);
+    }
+
+    private static String idStr(int handle) {
+        return Integer.toUnsignedString(handle);
+    }
+
+    private static MemorySegment dev(DeviceHandle handle) {
+        return ((LibMtpDevice) handle).device();
+    }
+
+    // ---- Scan / device lifecycle ----
+
     @Override
-    public RawDeviceResult detectRawDevices() throws IOException {
+    public Scan scan() throws IOException {
         try (var arena = Arena.ofConfined()) {
             var ptrOut = arena.allocate(ADDRESS);
             var countOut = arena.allocate(JAVA_INT);
@@ -203,11 +234,10 @@ class NativeLibMTP implements LibMTP {
             }
             int count = countOut.get(JAVA_INT, 0);
             if (count == 0) {
-                return new RawDeviceResult(MemorySegment.NULL, 0);
+                return new LibMtpScan(MemorySegment.NULL, 0);
             }
-            MemorySegment allocation = ptrOut.get(ADDRESS, 0)
-                .reinterpret(RAW_DEVICE_LAYOUT.byteSize() * count);
-            return new RawDeviceResult(allocation, count);
+            var allocation = ptrOut.get(ADDRESS, 0).reinterpret(RAW_DEVICE_LAYOUT.byteSize() * count);
+            return new LibMtpScan(allocation, count);
         } catch (IOException e) {
             throw e;
         } catch (Throwable t) {
@@ -215,69 +245,85 @@ class NativeLibMTP implements LibMTP {
         }
     }
 
-    @Override
-    public MemorySegment rawDeviceAt(MemorySegment allocation, int index) {
-        return allocation.asSlice(index * RAW_DEVICE_LAYOUT.byteSize(), RAW_DEVICE_LAYOUT.byteSize());
-    }
+    /** A libmtp raw-device scan; owns the raw-device allocation until {@link #close()}. */
+    private final class LibMtpScan implements Scan {
+        private final MemorySegment allocation;
+        private final int count;
 
-    @Override
-    public short getVendorId(MemorySegment rawDevice) {
-        return (short) RAW_DEVICE_VENDOR_ID.get(rawDevice);
-    }
+        LibMtpScan(MemorySegment allocation, int count) {
+            this.allocation = allocation;
+            this.count = count;
+        }
 
-    @Override
-    public short getProductId(MemorySegment rawDevice) {
-        return (short) RAW_DEVICE_PRODUCT_ID.get(rawDevice);
-    }
+        private MemorySegment rawDeviceAt(int index) {
+            return allocation.asSlice(index * RAW_DEVICE_LAYOUT.byteSize(), RAW_DEVICE_LAYOUT.byteSize());
+        }
 
-    @Override
-    public int getBusLocation(MemorySegment rawDevice) {
-        return (int) RAW_DEVICE_BUS_LOCATION.get(rawDevice);
-    }
+        @Override
+        public List<String> signatures() {
+            var sigs = new ArrayList<String>(count);
+            for (int i = 0; i < count; i++) {
+                var raw = rawDeviceAt(i);
+                sigs.add(Short.toUnsignedInt((short) RAW_DEVICE_VENDOR_ID.get(raw)) + ":"
+                    + Short.toUnsignedInt((short) RAW_DEVICE_PRODUCT_ID.get(raw)) + ":"
+                    + ((int) RAW_DEVICE_BUS_LOCATION.get(raw)) + ":"
+                    + Byte.toUnsignedInt((byte) RAW_DEVICE_DEVNUM.get(raw)));
+            }
+            return sigs;
+        }
 
-    @Override
-    public byte getDevNum(MemorySegment rawDevice) {
-        return (byte) RAW_DEVICE_DEVNUM.get(rawDevice);
-    }
+        @Override
+        public OpenedDevice open(int index) {
+            var raw = rawDeviceAt(index);
+            MemorySegment device;
+            try {
+                device = (MemorySegment) openRawDeviceUncached.invokeExact(raw);
+            } catch (Throwable t) {
+                throw new RuntimeException("Failed to open MTP device", t);
+            }
+            if (MemorySegment.NULL.equals(device)) {
+                return null;
+            }
+            int vendorId = Short.toUnsignedInt((short) RAW_DEVICE_VENDOR_ID.get(raw));
+            int productId = Short.toUnsignedInt((short) RAW_DEVICE_PRODUCT_ID.get(raw));
+            var id = new MTPDeviceIdentifier(vendorId, productId, readCString(invoke(getSerialNumber, device)));
+            var info = new MTPDeviceInfo(
+                id,
+                readCString(invoke(getFriendlyName, device)),
+                readCString(invoke(getModelName, device)),
+                readCString(invoke(getManufacturerName, device)),
+                Integer.toUnsignedLong((int) RAW_DEVICE_BUS_LOCATION.get(raw)),
+                Byte.toUnsignedLong((byte) RAW_DEVICE_DEVNUM.get(raw)));
+            return new OpenedDevice(id, info, new LibMtpDevice(raw, device));
+        }
 
-    @Override
-    public MemorySegment openRawDevice(MemorySegment rawDevice) {
-        try {
-            return (MemorySegment) openRawDeviceUncached.invokeExact(rawDevice);
-        } catch (Throwable t) {
-            throw new RuntimeException("Failed to open MTP device", t);
+        @Override
+        public void close() {
+            if (!MemorySegment.NULL.equals(allocation)) {
+                free(allocation);
+            }
         }
     }
 
     @Override
-    public String getSerialNumber(MemorySegment device) {
-        return readCString(invokeReturningAddress(getSerialNumber, device));
+    public void releaseDevice(DeviceHandle handle) {
+        try {
+            releaseDevice.invokeExact(dev(handle));
+        } catch (Throwable t) {
+            throw new RuntimeException("Failed to release MTP device", t);
+        }
     }
 
-    @Override
-    public String getFriendlyName(MemorySegment device) {
-        return readCString(invokeReturningAddress(getFriendlyName, device));
-    }
+    // ---- Storage ----
 
     @Override
-    public String getModelName(MemorySegment device) {
-        return readCString(invokeReturningAddress(getModelName, device));
-    }
-
-    @Override
-    public String getManufacturerName(MemorySegment device) {
-        return readCString(invokeReturningAddress(getManufacturerName, device));
-    }
-
-    @Override
-    public StorageResult findStorage(MemorySegment device, String storageName) {
-        var storage = firstStorage(device);
+    public StorageResult findStorage(DeviceHandle handle, String storageName) {
+        var storage = firstStorage(dev(handle));
         while (!MemorySegment.NULL.equals(storage)) {
             storage = storage.reinterpret(DEVICE_STORAGE_LAYOUT.byteSize());
             var descPtr = (MemorySegment) STORAGE_DESCRIPTION.get(storage);
             if (storageName.equals(readCString(descPtr))) {
-                long storageId = Integer.toUnsignedLong((int) STORAGE_ID.get(storage));
-                return new StorageResult(storageName, storageId);
+                return new StorageResult(storageName, idStr((int) STORAGE_ID.get(storage)));
             }
             storage = (MemorySegment) STORAGE_NEXT.get(storage);
         }
@@ -285,12 +331,22 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public long getCapacity(MemorySegment device, long storageId) {
+    public long getCapacity(DeviceHandle handle, String storageId) {
+        return storageField(dev(handle), storageId, STORAGE_MAX_CAPACITY);
+    }
+
+    @Override
+    public long getFreeSpace(DeviceHandle handle, String storageId) {
+        return storageField(dev(handle), storageId, STORAGE_FREE_SPACE_BYTES);
+    }
+
+    private long storageField(MemorySegment device, String storageId, VarHandle field) {
+        long target = Integer.toUnsignedLong(toHandle(storageId));
         var storage = firstStorage(device);
         while (!MemorySegment.NULL.equals(storage)) {
             storage = storage.reinterpret(DEVICE_STORAGE_LAYOUT.byteSize());
-            if (Integer.toUnsignedLong((int) STORAGE_ID.get(storage)) == storageId) {
-                return (long) STORAGE_MAX_CAPACITY.get(storage);
+            if (Integer.toUnsignedLong((int) STORAGE_ID.get(storage)) == target) {
+                return (long) field.get(storage);
             }
             storage = (MemorySegment) STORAGE_NEXT.get(storage);
         }
@@ -298,46 +354,34 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public long getFreeSpace(MemorySegment device, long storageId) {
-        var storage = firstStorage(device);
-        while (!MemorySegment.NULL.equals(storage)) {
-            storage = storage.reinterpret(DEVICE_STORAGE_LAYOUT.byteSize());
-            if (Integer.toUnsignedLong((int) STORAGE_ID.get(storage)) == storageId) {
-                return (long) STORAGE_FREE_SPACE_BYTES.get(storage);
-            }
-            storage = (MemorySegment) STORAGE_NEXT.get(storage);
-        }
-        return -1;
-    }
-
-    @Override
-    public List<StorageResult> listStorages(MemorySegment device) {
+    public List<StorageResult> listStorages(DeviceHandle handle) {
         var results = new ArrayList<StorageResult>();
-        var storage = firstStorage(device);
+        var storage = firstStorage(dev(handle));
         while (!MemorySegment.NULL.equals(storage)) {
             storage = storage.reinterpret(DEVICE_STORAGE_LAYOUT.byteSize());
             var descPtr = (MemorySegment) STORAGE_DESCRIPTION.get(storage);
-            long id = Integer.toUnsignedLong((int) STORAGE_ID.get(storage));
-            results.add(new StorageResult(readCString(descPtr), id));
+            results.add(new StorageResult(readCString(descPtr), idStr((int) STORAGE_ID.get(storage))));
             storage = (MemorySegment) STORAGE_NEXT.get(storage);
         }
         return results;
     }
 
+    // ---- Items ----
+
     @Override
-    public MTPItemInfo[] getChildItems(MemorySegment device, long storageId, long parentId) throws IOException {
+    public MTPItemInfo[] getChildItems(DeviceHandle handle, String storageId, String parentId) throws IOException {
         try {
             var filePtr = (MemorySegment) getFilesAndFolders.invokeExact(
-                device, (int) storageId, (int) parentId);
+                dev(handle), toHandle(storageId), toHandle(parentId));
 
             var items = new ArrayList<MTPItemInfo>();
             while (!MemorySegment.NULL.equals(filePtr)) {
                 var file = filePtr.reinterpret(FILE_LAYOUT.byteSize());
                 var nextPtr = (MemorySegment) FILE_NEXT.get(file);
                 items.add(new MTPItemInfo(
-                    Integer.toUnsignedLong((int) FILE_PARENT_ID.get(file)),
-                    Integer.toUnsignedLong((int) FILE_ITEM_ID.get(file)),
-                    Integer.toUnsignedLong((int) FILE_STORAGE_ID.get(file)),
+                    idStr((int) FILE_PARENT_ID.get(file)),
+                    idStr((int) FILE_ITEM_ID.get(file)),
+                    idStr((int) FILE_STORAGE_ID.get(file)),
                     (int) FILE_FILETYPE.get(file) != LIBMTP_FILETYPE_FOLDER,
                     (long) FILE_FILESIZE.get(file),
                     (long) FILE_MODIFICATIONDATE.get(file),
@@ -353,12 +397,13 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public long createFolder(MemorySegment device, String name, long parentId, long storageId) throws IOException {
+    public String createFolder(DeviceHandle handle, String name, String parentId, String storageId) throws IOException {
         try (var arena = Arena.ofConfined()) {
             var nameSeg = arena.allocateFrom(name);
-            int folderId = (int) createFolderFn.invokeExact(device, nameSeg, (int) parentId, (int) storageId);
+            int folderId = (int) createFolderFn.invokeExact(
+                dev(handle), nameSeg, toHandle(parentId), toHandle(storageId));
             if (folderId == 0) throw new IOException("LIBMTP_Create_Folder failed for: " + name);
-            return Integer.toUnsignedLong(folderId);
+            return idStr(folderId);
         } catch (IOException e) {
             throw e;
         } catch (Throwable t) {
@@ -367,9 +412,9 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public void deleteObject(MemorySegment device, long itemId) throws IOException {
+    public void deleteObject(DeviceHandle handle, String itemId) throws IOException {
         try {
-            int ret = (int) deleteObjectFn.invokeExact(device, (int) itemId);
+            int ret = (int) deleteObjectFn.invokeExact(dev(handle), toHandle(itemId));
             if (ret != 0) throw new IOException("LIBMTP_Delete_Object failed for id: " + itemId);
         } catch (IOException e) {
             throw e;
@@ -379,13 +424,13 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public void getFile(MemorySegment device, long itemId, String destPath) throws IOException {
+    public void getFile(DeviceHandle handle, String itemId, String destPath) throws IOException {
         try (var arena = Arena.ofConfined()) {
             var pathSeg = arena.allocateFrom(destPath);
             int ret;
             try {
                 ret = (int) getFileToFile.invokeExact(
-                    device, (int) itemId, pathSeg, MemorySegment.NULL, MemorySegment.NULL);
+                    dev(handle), toHandle(itemId), pathSeg, MemorySegment.NULL, MemorySegment.NULL);
             } catch (Throwable t) {
                 throw new IOException("Failed to retrieve file from device", t);
             }
@@ -396,13 +441,13 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public long sendFile(MemorySegment device, String localPath, String filename,
-                         long parentId, long storageId, long filesize) throws IOException {
+    public String sendFile(DeviceHandle handle, String localPath, String filename,
+                           String parentId, String storageId, long filesize) throws IOException {
         try (var arena = Arena.ofConfined()) {
             // Arena.allocate zero-fills, so item_id, padding and next are 0/NULL.
             var fileData = arena.allocate(FILE_LAYOUT);
-            FILE_PARENT_ID.set(fileData, (int) parentId);
-            FILE_STORAGE_ID.set(fileData, (int) storageId);
+            FILE_PARENT_ID.set(fileData, toHandle(parentId));
+            FILE_STORAGE_ID.set(fileData, toHandle(storageId));
             FILE_FILENAME.set(fileData, arena.allocateFrom(filename));
             FILE_FILESIZE.set(fileData, filesize);
             FILE_FILETYPE.set(fileData, LIBMTP_FILETYPE_UNKNOWN);
@@ -411,21 +456,22 @@ class NativeLibMTP implements LibMTP {
             int ret;
             try {
                 ret = (int) sendFileFromFile.invokeExact(
-                    device, pathSeg, fileData, MemorySegment.NULL, MemorySegment.NULL);
+                    dev(handle), pathSeg, fileData, MemorySegment.NULL, MemorySegment.NULL);
             } catch (Throwable t) {
                 throw new IOException("Failed to send file to device", t);
             }
             if (ret != 0) {
                 throw new IOException("LIBMTP_Send_File_From_File failed with code " + ret + " for: " + filename);
             }
-            return Integer.toUnsignedLong((int) FILE_ITEM_ID.get(fileData));
+            return idStr((int) FILE_ITEM_ID.get(fileData));
         }
     }
 
     @Override
-    public void moveObject(MemorySegment device, long itemId, long storageId, long parentId) throws IOException {
+    public void moveObject(DeviceHandle handle, String itemId, String storageId, String parentId) throws IOException {
         try {
-            int ret = (int) moveObjectFn.invokeExact(device, (int) itemId, (int) storageId, (int) parentId);
+            int ret = (int) moveObjectFn.invokeExact(
+                dev(handle), toHandle(itemId), toHandle(storageId), toHandle(parentId));
             if (ret != 0) throw new IOException("LIBMTP_Move_Object failed with code " + ret + " for id: " + itemId);
         } catch (IOException e) {
             throw e;
@@ -435,16 +481,16 @@ class NativeLibMTP implements LibMTP {
     }
 
     @Override
-    public void setFileName(MemorySegment device, long itemId, String newName) throws IOException {
+    public void setFileName(DeviceHandle handle, String itemId, String newName) throws IOException {
         try (var arena = Arena.ofConfined()) {
             // Set_File_Name only reads filedata->item_id; the rest is zero-filled by allocate.
             var fileData = arena.allocate(FILE_LAYOUT);
-            FILE_ITEM_ID.set(fileData, (int) itemId);
+            FILE_ITEM_ID.set(fileData, toHandle(itemId));
             FILE_FILETYPE.set(fileData, LIBMTP_FILETYPE_UNKNOWN);
             var nameSeg = arena.allocateFrom(newName);
             int ret;
             try {
-                ret = (int) setFileNameFn.invokeExact(device, fileData, nameSeg);
+                ret = (int) setFileNameFn.invokeExact(dev(handle), fileData, nameSeg);
             } catch (Throwable t) {
                 throw new IOException("Failed to rename object on device", t);
             }
@@ -452,17 +498,9 @@ class NativeLibMTP implements LibMTP {
         }
     }
 
-    @Override
-    public void releaseDevice(MemorySegment device) {
-        try {
-            releaseDevice.invokeExact(device);
-        } catch (Throwable t) {
-            throw new RuntimeException("Failed to release MTP device", t);
-        }
-    }
+    // ---- Low-level helpers ----
 
-    @Override
-    public void free(MemorySegment ptr) {
+    private void free(MemorySegment ptr) {
         try {
             freeFn.invokeExact(ptr);
         } catch (Throwable t) {
@@ -475,7 +513,7 @@ class NativeLibMTP implements LibMTP {
             .get(ADDRESS, DEVICE_STORAGE_FIELD_OFFSET);
     }
 
-    private MemorySegment invokeReturningAddress(MethodHandle handle, MemorySegment arg) {
+    private MemorySegment invoke(MethodHandle handle, MemorySegment arg) {
         try {
             return (MemorySegment) handle.invokeExact(arg);
         } catch (Throwable t) {

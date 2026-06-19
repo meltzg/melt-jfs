@@ -14,13 +14,13 @@ public class MTPDeviceBridgeTest {
 
     @BeforeClass
     public static void injectFake() {
-        MTPDeviceBridge.setLibMTP(new FakeLibMTP());
+        MTPDeviceBridge.setBackend(new FakeLibMTP());
     }
 
     @AfterClass
     public static void removeFake() throws IOException {
         MTPDeviceBridge.INSTANCE.close();
-        MTPDeviceBridge.setLibMTP(null);
+        MTPDeviceBridge.setBackend(null);
     }
 
     @Before

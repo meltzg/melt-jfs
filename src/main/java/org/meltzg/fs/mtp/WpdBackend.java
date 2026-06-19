@@ -53,6 +53,7 @@ class WpdBackend implements MtpBackend {
     private static final MemorySegment KEY_NAME;
     private static final MemorySegment KEY_ORIGINAL_FILE_NAME;
     private static final MemorySegment KEY_CONTENT_TYPE;
+    private static final MemorySegment KEY_OBJECT_FORMAT;
     private static final MemorySegment KEY_OBJECT_SIZE;
     private static final MemorySegment KEY_DATE_MODIFIED;
     private static final MemorySegment KEY_FUNCTIONAL_CATEGORY;
@@ -60,11 +61,16 @@ class WpdBackend implements MtpBackend {
     private static final MemorySegment KEY_STORAGE_FREE_SPACE;
     private static final MemorySegment KEY_RESOURCE_DEFAULT;
     private static final MemorySegment KEY_CLIENT_NAME;
+    private static final MemorySegment KEY_CLIENT_MAJOR_VERSION;
+    private static final MemorySegment KEY_CLIENT_MINOR_VERSION;
+    private static final MemorySegment KEY_CLIENT_REVISION;
 
     // ---- content-type / category GUID values ----
     private static final MemorySegment CONTENT_TYPE_FOLDER;
     private static final MemorySegment CONTENT_TYPE_FUNCTIONAL_OBJECT;
     private static final MemorySegment CONTENT_TYPE_GENERIC_FILE;
+    private static final MemorySegment FORMAT_UNSPECIFIED;
+    private static final MemorySegment FORMAT_PROPERTIES_ONLY;
     private static final MemorySegment FUNCTIONAL_CATEGORY_STORAGE;
 
     // The well-known root from which a device's functional objects (storages) are enumerated.
@@ -73,12 +79,15 @@ class WpdBackend implements MtpBackend {
     // ---- vtable indices (after IUnknown's QueryInterface=0, AddRef=1, Release=2) ----
     private static final int MGR_GET_DEVICES = 3, MGR_FRIENDLY_NAME = 5, MGR_DESCRIPTION = 6, MGR_MANUFACTURER = 7;
     private static final int DEV_OPEN = 3, DEV_CONTENT = 5, DEV_CLOSE = 8;
-    private static final int CONTENT_ENUM = 3, CONTENT_PROPERTIES = 4, CONTENT_TRANSFER = 5, CONTENT_DELETE = 6,
-        CONTENT_CREATE_PROPS = 7, CONTENT_CREATE_DATA = 8, CONTENT_MOVE = 9;
+    // IPortableDeviceContent vtable order (after IUnknown): EnumObjects(3), Properties(4), Transfer(5),
+    // CreateObjectWithPropertiesOnly(6), CreateObjectWithPropertiesAndData(7), Delete(8),
+    // GetObjectIDsFromPersistentUniqueIDs(9), Cancel(10), Move(11), Copy(12).
+    private static final int CONTENT_ENUM = 3, CONTENT_PROPERTIES = 4, CONTENT_TRANSFER = 5,
+        CONTENT_CREATE_PROPS = 6, CONTENT_CREATE_DATA = 7, CONTENT_DELETE = 8, CONTENT_MOVE = 11;
     private static final int ENUM_NEXT = 3;
     private static final int PROPS_GET_VALUES = 5, PROPS_SET_VALUES = 6;
     private static final int RES_GET_STREAM = 5;
-    private static final int VAL_GET_VALUE = 6, VAL_SET_STRING = 7, VAL_GET_STRING = 8,
+    private static final int VAL_GET_VALUE = 6, VAL_SET_STRING = 7, VAL_GET_STRING = 8, VAL_SET_U4 = 9,
         VAL_SET_U8 = 13, VAL_GET_U8 = 14, VAL_SET_GUID = 27, VAL_GET_GUID = 28;
     private static final int KEYCOLL_ADD = 5;
     private static final int PVCOLL_ADD = 5;
@@ -102,12 +111,13 @@ class WpdBackend implements MtpBackend {
         CLSID_KEY_COLLECTION = guid(a, "de2d022d-2480-43be-97f0-d1fa2cf98f4f");
         IID_KEY_COLLECTION = guid(a, "dada2357-e0ad-492e-98db-dd61c53ba353");
         CLSID_PROPVARIANT_COLLECTION = guid(a, "08a99e2f-6d6d-4b80-af5a-baf2bcbe4cb9");
-        IID_PROPVARIANT_COLLECTION = guid(a, "89b2e422-4f1b-4316-bcef-a44afea84eb7");
+        IID_PROPVARIANT_COLLECTION = guid(a, "89b2e422-4f1b-4316-bcef-a44afea83eb3");
 
         String objFmt = "ef6b490d-5cd8-437a-affc-da8b60ee4a3c";
         KEY_OBJECT_ID = propertyKey(a, objFmt, 2);
         KEY_PARENT_ID = propertyKey(a, objFmt, 3);
         KEY_NAME = propertyKey(a, objFmt, 4);
+        KEY_OBJECT_FORMAT = propertyKey(a, objFmt, 6);
         KEY_CONTENT_TYPE = propertyKey(a, objFmt, 7);
         KEY_OBJECT_SIZE = propertyKey(a, objFmt, 11);
         KEY_ORIGINAL_FILE_NAME = propertyKey(a, objFmt, 12);
@@ -116,11 +126,17 @@ class WpdBackend implements MtpBackend {
         KEY_STORAGE_CAPACITY = propertyKey(a, "01a3057a-74d6-4e80-bea7-dc4c212ce50a", 4);
         KEY_STORAGE_FREE_SPACE = propertyKey(a, "01a3057a-74d6-4e80-bea7-dc4c212ce50a", 5);
         KEY_RESOURCE_DEFAULT = propertyKey(a, "e81e79be-34f0-41bf-b53f-f1a06ae87842", 0);
-        KEY_CLIENT_NAME = propertyKey(a, "204d9f0c-2292-4080-9f42-40664e70f859", 2);
+        String clientFmt = "204d9f0c-2292-4080-9f42-40664e70f859";
+        KEY_CLIENT_NAME = propertyKey(a, clientFmt, 2);
+        KEY_CLIENT_MAJOR_VERSION = propertyKey(a, clientFmt, 3);
+        KEY_CLIENT_MINOR_VERSION = propertyKey(a, clientFmt, 4);
+        KEY_CLIENT_REVISION = propertyKey(a, clientFmt, 5);
 
         CONTENT_TYPE_FOLDER = guid(a, "27e2e392-a111-48e0-ab0c-e17705a05f85");
         CONTENT_TYPE_FUNCTIONAL_OBJECT = guid(a, "99ed0160-17ff-4c44-9d98-1d7a6f941921");
         CONTENT_TYPE_GENERIC_FILE = guid(a, "0085e0a6-8d34-45d7-bc5c-447e59c73d48");
+        FORMAT_UNSPECIFIED = guid(a, "30000000-ae6c-4804-98ba-c57b46965fe7");
+        FORMAT_PROPERTIES_ONLY = guid(a, "30010000-ae6c-4804-98ba-c57b46965fe7");
         FUNCTIONAL_CATEGORY_STORAGE = guid(a, "23f05bbc-15de-4c2a-a55b-a9af5ce412ef");
     }
 
@@ -218,8 +234,13 @@ class WpdBackend implements MtpBackend {
         var device = createInstance(CLSID_DEVICE_FTM, IID_DEVICE, "create PortableDevice");
         try (var arena = Arena.ofConfined()) {
             var clientInfo = createInstance(CLSID_VALUES, IID_VALUES, "create client info");
+            // WPD generates the per-connection client context from these during Open; some device
+            // operations (notably object creation) misbehave when the version fields are absent.
             call(clientInfo, VAL_SET_STRING, FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS),
                 KEY_CLIENT_NAME, wstr(arena, "melt-jfs"));
+            call(clientInfo, VAL_SET_U4, FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT), KEY_CLIENT_MAJOR_VERSION, 1);
+            call(clientInfo, VAL_SET_U4, FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT), KEY_CLIENT_MINOR_VERSION, 0);
+            call(clientInfo, VAL_SET_U4, FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT), KEY_CLIENT_REVISION, 0);
             var idW = wstr(arena, deviceId);
             int hr = call(device, DEV_OPEN, FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS), idW, clientInfo);
             release(clientInfo);
@@ -385,6 +406,8 @@ class WpdBackend implements MtpBackend {
                 setString(values, KEY_NAME, wstr(arena, name));
                 setString(values, KEY_ORIGINAL_FILE_NAME, wstr(arena, name));
                 setGuid(values, KEY_CONTENT_TYPE, CONTENT_TYPE_FOLDER);
+                // A folder is a properties-only object; WPD requires the matching format guid.
+                setGuid(values, KEY_OBJECT_FORMAT, FORMAT_PROPERTIES_ONLY);
                 var idOut = arena.allocate(ADDRESS);
                 checkHr(call(d.content(), CONTENT_CREATE_PROPS,
                         FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS), values, idOut),
@@ -426,8 +449,8 @@ class WpdBackend implements MtpBackend {
                 var optBuf = arena.allocate(JAVA_INT);
                 var streamOut = arena.allocate(ADDRESS);
                 checkHr(call(resources, RES_GET_STREAM,
-                        FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS),
-                        wstr(arena, itemId), KEY_RESOURCE_DEFAULT, optBuf, streamOut),
+                        FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS),
+                        wstr(arena, itemId), KEY_RESOURCE_DEFAULT, STGM_READ, optBuf, streamOut),
                     "IPortableDeviceResources::GetStream");
                 var stream = streamOut.get(ADDRESS, 0);
                 int bufSize = Math.max(optBuf.get(JAVA_INT, 0), 1 << 16);
@@ -456,15 +479,16 @@ class WpdBackend implements MtpBackend {
                 setString(values, KEY_ORIGINAL_FILE_NAME, wstr(arena, filename));
                 setU8(values, KEY_OBJECT_SIZE, filesize);
                 setGuid(values, KEY_CONTENT_TYPE, CONTENT_TYPE_GENERIC_FILE);
+                // WPD requires an object format alongside the content type; the generic
+                // "unspecified" format lets the device store an arbitrary byte stream.
+                setGuid(values, KEY_OBJECT_FORMAT, FORMAT_UNSPECIFIED);
 
                 var streamOut = arena.allocate(ADDRESS);
                 var optBuf = arena.allocate(JAVA_INT);
-                var cookieOut = arena.allocate(ADDRESS);
                 checkHr(call(d.content(), CONTENT_CREATE_DATA,
                         FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS),
-                        values, streamOut, optBuf, cookieOut),
+                        values, streamOut, optBuf, MemorySegment.NULL),
                     "CreateObjectWithPropertiesAndData");
-                coTaskMemFree(cookieOut.get(ADDRESS, 0));
                 stream = streamOut.get(ADDRESS, 0);
                 int bufSize = Math.max(optBuf.get(JAVA_INT, 0), 1 << 16);
                 try (var in = Files.newInputStream(Path.of(localPath))) {

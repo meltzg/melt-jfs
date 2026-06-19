@@ -40,7 +40,7 @@ final class WpdCom {
     // Layout sizes
     static final long GUID_SIZE = 16;
     static final long PROPERTYKEY_SIZE = 20;   // GUID(16) + DWORD pid(4)
-    static final long PROPVARIANT_SIZE = 16;   // vt(2) + reserved(6) + union(8)
+    static final long PROPVARIANT_SIZE = 24;   // vt(2) + reserved(6) + union(16: BLOB is ULONG+ptr on 64-bit)
 
     private static final MethodHandle CO_INITIALIZE_EX;
     private static final MethodHandle CO_CREATE_INSTANCE;
@@ -136,6 +136,9 @@ final class WpdCom {
      * {@code desc} must include the implicit {@code this} pointer as its first parameter.
      */
     static MethodHandle method(MemorySegment thisPtr, int index, FunctionDescriptor desc) {
+        // COM interface pointers returned from native calls have byteSize 0 in FFM; reinterpret so
+        // we can read the vtable pointer at offset 0.
+        if (thisPtr.byteSize() == 0) thisPtr = thisPtr.reinterpret(Long.MAX_VALUE);
         var vtbl = thisPtr.get(ADDRESS, 0).reinterpret((long) (index + 1) * ADDRESS.byteSize());
         var fn = vtbl.getAtIndex(ADDRESS, index);
         return LINKER.downcallHandle(fn, desc);

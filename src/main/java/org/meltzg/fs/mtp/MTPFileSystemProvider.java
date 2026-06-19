@@ -392,7 +392,8 @@ public class MTPFileSystemProvider extends FileSystemProvider {
         var absPath = path.toAbsolutePath().toString();
         if (absPath.equals("/")) {
             // Device root: synthesise a directory entry
-            var rootItem = new org.meltzg.fs.mtp.types.MTPItemInfo(0, 0, 0, false, 0, 0, "/");
+            var rootItem = new org.meltzg.fs.mtp.types.MTPItemInfo(
+                MtpBackend.ROOT_PARENT, "/", "/", false, 0, 0, "/");
             return (A) new MTPBasicFileAttributes(rootItem);
         }
         var item = MTPDeviceBridge.getInstance().resolveItem(deviceId, absPath);

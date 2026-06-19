@@ -11,9 +11,9 @@ import java.util.Objects;
 public class MTPFileStore extends FileStore {
     private final String name;
     private final MTPDeviceIdentifier deviceId;
-    private final long storageId;
+    private final String storageId;
 
-    public MTPFileStore(String name, MTPDeviceIdentifier deviceId, long storageId) {
+    public MTPFileStore(String name, MTPDeviceIdentifier deviceId, String storageId) {
         this.name = name;
         this.deviceId = deviceId;
         this.storageId = storageId;
@@ -79,7 +79,7 @@ public class MTPFileStore extends FileStore {
         if (this == o) return true;
         if (!(o instanceof MTPFileStore other)) return false;
         if (!super.equals(o)) return false;
-        return storageId == other.storageId
+        return Objects.equals(storageId, other.storageId)
             && Objects.equals(name, other.name)
             && Objects.equals(deviceId, other.deviceId);
     }

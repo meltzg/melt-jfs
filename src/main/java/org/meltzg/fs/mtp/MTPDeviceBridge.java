@@ -2,7 +2,6 @@ package org.meltzg.fs.mtp;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
@@ -14,7 +13,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.meltzg.fs.mtp.types.MTPDeviceConnection;
 import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
 import org.meltzg.fs.mtp.types.MTPDeviceInfo;
-
 import org.meltzg.fs.mtp.types.MTPItemInfo;
 
 public enum MTPDeviceBridge implements Closeable {
@@ -26,25 +24,24 @@ public enum MTPDeviceBridge implements Closeable {
     private ReentrantReadWriteLock connectionLock;
     private Map<MTPDeviceIdentifier, MTPDeviceInfo> deviceInfo;
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
-    private MemorySegment rawDevicesAllocation;
+    // The scan whose opened devices are currently live; held so its native resources outlive the
+    // connections and are released together in closeUnsafe(). Null when nothing is open.
+    private MtpBackend.Scan currentScan;
 
-    // Identity (vendor/product/bus/devnum) of the raw devices seen at the last scan, used to detect
-    // hot-plug/unplug/reconnect without reopening still-present devices.
-    private Set<RawDeviceSignature> lastSignature = Set.of();
+    // Signatures of the devices seen at the last scan, used to detect hot-plug/unplug/reconnect
+    // without reopening still-present devices.
+    private Set<String> lastSignature = Set.of();
     private volatile boolean devicesDetected = false;
     private volatile long lastDetectNanos = 0L;
 
-    // Allows tests to inject a fake LibMTP without loading native libmtp
-    private static volatile LibMTP libOverride = null;
-
-    /** A physical device's USB identity, stable while attached, used to detect topology changes. */
-    private record RawDeviceSignature(int vendorId, int productId, int busLocation, int devNum) {}
+    // Allows tests to inject a fake backend without loading native libraries.
+    private static volatile MtpBackend backendOverride = null;
 
     private MTPDeviceBridge() {
         this.connectionLock = new ReentrantReadWriteLock();
         this.deviceInfo = new HashMap<>();
         this.deviceConns = new LinkedHashMap<>();
-        this.rawDevicesAllocation = MemorySegment.NULL;
+        this.currentScan = null;
     }
 
     public Map<MTPDeviceIdentifier, MTPDeviceInfo> getDeviceInfo() {
@@ -55,13 +52,13 @@ public enum MTPDeviceBridge implements Closeable {
         return deviceConns;
     }
 
-    static void setLibMTP(LibMTP impl) {
-        libOverride = impl;
+    static void setBackend(MtpBackend impl) {
+        backendOverride = impl;
     }
 
-    private static LibMTP lib() {
-        var o = libOverride;
-        return o != null ? o : NativeLibMTP.getInstance();
+    private static MtpBackend backend() {
+        var o = backendOverride;
+        return o != null ? o : MtpBackend.defaultBackend();
     }
 
     public static MTPDeviceBridge getInstance() throws IOException {
@@ -117,24 +114,24 @@ public enum MTPDeviceBridge implements Closeable {
         }
     }
 
-    public long getCapacity(MTPDeviceIdentifier deviceId, long storageId) throws IOException {
+    public long getCapacity(MTPDeviceIdentifier deviceId, String storageId) throws IOException {
         connectionLock.readLock().lock();
         try {
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                return getCapacity(conn, storageId);
+                return backend().getCapacity(conn.handle(), storageId);
             }
         } finally {
             connectionLock.readLock().unlock();
         }
     }
 
-    public long getFreeSpace(MTPDeviceIdentifier deviceId, long storageId) throws IOException {
+    public long getFreeSpace(MTPDeviceIdentifier deviceId, String storageId) throws IOException {
         connectionLock.readLock().lock();
         try {
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                return getFreeSpace(conn, storageId);
+                return backend().getFreeSpace(conn.handle(), storageId);
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -182,16 +179,16 @@ public enum MTPDeviceBridge implements Closeable {
             }
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                var libMtp = lib();
-                var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
+                var backend = backend();
+                var storage = backend.findStorage(conn.handle(), parts[0]);
                 if (storage == null) throw new NoSuchFileException("/" + parts[0]);
-                long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+                String parentId = MtpBackend.ROOT_PARENT;
                 if (parts.length > 2) {
                     var parentParts = Arrays.copyOf(parts, parts.length - 1);
                     var parentItem = resolveItemUnsafe(conn, parentParts);
                     parentId = parentItem.itemId();
                 }
-                libMtp.createFolder(conn.deviceConn(), parts[parts.length - 1], parentId, storage.storageId());
+                backend.createFolder(conn.handle(), parts[parts.length - 1], parentId, storage.storageId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -206,7 +203,7 @@ public enum MTPDeviceBridge implements Closeable {
             synchronized (conn) {
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
-                lib().deleteObject(conn.deviceConn(), item.itemId());
+                backend().deleteObject(conn.handle(), item.itemId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -218,7 +215,7 @@ public enum MTPDeviceBridge implements Closeable {
      * the same name. The path must be at least {@code /Storage/file} (cannot write at the device
      * root or storage level). Returns the new item's id.
      */
-    public long writeFile(MTPDeviceIdentifier deviceId, String path, java.nio.file.Path localFile) throws IOException {
+    public String writeFile(MTPDeviceIdentifier deviceId, String path, java.nio.file.Path localFile) throws IOException {
         connectionLock.readLock().lock();
         try {
             var parts = pathParts(path);
@@ -227,10 +224,10 @@ public enum MTPDeviceBridge implements Closeable {
             }
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                var libMtp = lib();
-                var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
+                var backend = backend();
+                var storage = backend.findStorage(conn.handle(), parts[0]);
                 if (storage == null) throw new NoSuchFileException("/" + parts[0]);
-                long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+                String parentId = MtpBackend.ROOT_PARENT;
                 if (parts.length > 2) {
                     var parentParts = Arrays.copyOf(parts, parts.length - 1);
                     var parentItem = resolveItemUnsafe(conn, parentParts);
@@ -245,10 +242,10 @@ public enum MTPDeviceBridge implements Closeable {
                     if (!existing.isFile()) {
                         throw new IOException("Target exists and is a directory: " + path);
                     }
-                    libMtp.deleteObject(conn.deviceConn(), existing.itemId());
+                    backend.deleteObject(conn.handle(), existing.itemId());
                 }
                 long size = java.nio.file.Files.size(localFile);
-                return libMtp.sendFile(conn.deviceConn(), localFile.toString(),
+                return backend.sendFile(conn.handle(), localFile.toString(),
                     name, parentId, storage.storageId(), size);
             }
         } finally {
@@ -275,12 +272,12 @@ public enum MTPDeviceBridge implements Closeable {
             }
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                var libMtp = lib();
+                var backend = backend();
                 var source = resolveItemUnsafe(conn, srcParts);
 
-                var tgtStorage = libMtp.findStorage(conn.deviceConn(), tgtParts[0]);
+                var tgtStorage = backend.findStorage(conn.handle(), tgtParts[0]);
                 if (tgtStorage == null) throw new NoSuchFileException("/" + tgtParts[0]);
-                long tgtParentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+                String tgtParentId = MtpBackend.ROOT_PARENT;
                 if (tgtParts.length > 2) {
                     var parentParts = Arrays.copyOf(tgtParts, tgtParts.length - 1);
                     var parentItem = resolveItemUnsafe(conn, parentParts);
@@ -293,7 +290,7 @@ public enum MTPDeviceBridge implements Closeable {
                 var tgtName = tgtParts[tgtParts.length - 1];
                 var existingTgt = findChildUnsafe(conn, tgtStorage.storageId(), tgtParentId, tgtName);
                 if (existingTgt != null) {
-                    if (existingTgt.itemId() == source.itemId()) {
+                    if (existingTgt.itemId().equals(source.itemId())) {
                         return; // source and target are the same object
                     }
                     if (!replace) throw new FileAlreadyExistsException(targetPath);
@@ -310,13 +307,13 @@ public enum MTPDeviceBridge implements Closeable {
 
                 try {
                     if (existingTgt != null) {
-                        libMtp.deleteObject(conn.deviceConn(), existingTgt.itemId());
+                        backend.deleteObject(conn.handle(), existingTgt.itemId());
                     }
                     if (!sameDirectory) {
-                        libMtp.moveObject(conn.deviceConn(), source.itemId(), tgtStorage.storageId(), tgtParentId);
+                        backend.moveObject(conn.handle(), source.itemId(), tgtStorage.storageId(), tgtParentId);
                     }
                     if (!source.filename().equals(tgtName)) {
-                        libMtp.setFileName(conn.deviceConn(), source.itemId(), tgtName);
+                        backend.setFileName(conn.handle(), source.itemId(), tgtName);
                     }
                 } catch (IOException nativeError) {
                     // Many devices do not implement MoveObject/SetObjectName; let the caller emulate.
@@ -339,7 +336,7 @@ public enum MTPDeviceBridge implements Closeable {
                 var item = resolveItemUnsafe(conn, parts);
                 if (item == null) throw new NoSuchFileException(path);
                 if (!item.isFile()) throw new IOException(path + " is not a file");
-                lib().getFile(conn.deviceConn(), item.itemId(), localFile.toString());
+                backend().getFile(conn.handle(), item.itemId(), localFile.toString());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -357,72 +354,52 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     /**
-     * Detects currently attached raw devices and, only if the set has changed since the last scan,
-     * tears down the existing connections and reopens from scratch. When the device set is
-     * unchanged the open connections are left intact (reopening would needlessly reclaim the USB
-     * interface). Caller must hold the write lock.
+     * Scans currently attached devices and, only if the set has changed since the last scan, tears
+     * down the existing connections and reopens from scratch. When the device set is unchanged the
+     * open connections are left intact (reopening would needlessly reclaim the USB interface). Caller
+     * must hold the write lock.
      */
     private void reconcileDevicesUnsafe() throws IOException {
-        var libMtp = lib();
-        var detection = libMtp.detectRawDevices();
-        boolean ownsAllocation = false;
+        var scan = backend().scan();
+        boolean keepScan = false;
         try {
-            var signature = signatureOf(detection);
+            var signature = new HashSet<>(scan.signatures());
             if (signature.equals(lastSignature) && !deviceConns.isEmpty()) {
-                return; // nothing changed; keep the live connections
+                return; // nothing changed; keep the live connections (and discard this scan)
             }
             closeUnsafe();
-            rawDevicesAllocation = detection.allocation();
-            ownsAllocation = true;
-            openDevicesUnsafe(detection);
+            openDevicesUnsafe(scan);
+            currentScan = scan;
+            keepScan = true;
             lastSignature = signature;
         } finally {
-            if (!ownsAllocation && !MemorySegment.NULL.equals(detection.allocation())) {
-                libMtp.free(detection.allocation());
+            if (!keepScan) {
+                scan.close();
             }
         }
     }
 
-    private Set<RawDeviceSignature> signatureOf(LibMTP.RawDeviceResult detection) {
-        var libMtp = lib();
-        var signature = new HashSet<RawDeviceSignature>();
-        for (int i = 0; i < detection.count(); i++) {
-            var rawDevice = libMtp.rawDeviceAt(detection.allocation(), i);
-            signature.add(new RawDeviceSignature(
-                Short.toUnsignedInt(libMtp.getVendorId(rawDevice)),
-                Short.toUnsignedInt(libMtp.getProductId(rawDevice)),
-                libMtp.getBusLocation(rawDevice),
-                Byte.toUnsignedInt(libMtp.getDevNum(rawDevice))));
-        }
-        return signature;
-    }
-
-    private void openDevicesUnsafe(LibMTP.RawDeviceResult detection) {
-        var libMtp = lib();
-        for (int i = 0; i < detection.count(); i++) {
-            var rawDevice = libMtp.rawDeviceAt(detection.allocation(), i);
-            var device = libMtp.openRawDevice(rawDevice);
-            if (MemorySegment.NULL.equals(device)) {
+    private void openDevicesUnsafe(MtpBackend.Scan scan) throws IOException {
+        var signatures = scan.signatures();
+        for (int i = 0; i < signatures.size(); i++) {
+            var opened = scan.open(i);
+            if (opened == null) {
                 continue;
             }
-            var serial = libMtp.getSerialNumber(device);
-            var vendorId = Short.toUnsignedInt(libMtp.getVendorId(rawDevice));
-            var productId = Short.toUnsignedInt(libMtp.getProductId(rawDevice));
-            var conn = new MTPDeviceConnection(
-                new MTPDeviceIdentifier(vendorId, productId, serial), rawDevice, device);
+            var conn = new MTPDeviceConnection(opened.id(), opened.handle());
             deviceConns.put(conn.deviceId(), conn);
-            deviceInfo.put(conn.deviceId(), getDeviceInfo(conn));
+            deviceInfo.put(conn.deviceId(), opened.info());
         }
     }
 
     private void closeUnsafe() {
-        var libMtp = lib();
+        var backend = backend();
         for (var conn : deviceConns.values()) {
-            libMtp.releaseDevice(conn.deviceConn());
+            backend.releaseDevice(conn.handle());
         }
-        if (!MemorySegment.NULL.equals(rawDevicesAllocation)) {
-            libMtp.free(rawDevicesAllocation);
-            rawDevicesAllocation = MemorySegment.NULL;
+        if (currentScan != null) {
+            currentScan.close();
+            currentScan = null;
         }
         deviceInfo.clear();
         deviceConns.clear();
@@ -430,34 +407,12 @@ public enum MTPDeviceBridge implements Closeable {
         devicesDetected = false;
     }
 
-    private MTPDeviceInfo getDeviceInfo(MTPDeviceConnection conn) {
-        var libMtp = lib();
-        var device = conn.deviceConn();
-        var rawDevice = conn.rawDeviceConn();
-        return new MTPDeviceInfo(
-            conn.deviceId(),
-            libMtp.getFriendlyName(device),
-            libMtp.getModelName(device),
-            libMtp.getManufacturerName(device),
-            Integer.toUnsignedLong(libMtp.getBusLocation(rawDevice)),
-            Byte.toUnsignedLong(libMtp.getDevNum(rawDevice))
-        );
-    }
-
     private MTPFileStore getFileStore(MTPDeviceConnection conn, String storageName) throws IOException {
-        var result = lib().findStorage(conn.deviceConn(), storageName);
+        var result = backend().findStorage(conn.handle(), storageName);
         if (result == null) {
             throw new NoSuchFileException("/" + storageName);
         }
         return new MTPFileStore(result.name(), conn.deviceId(), result.storageId());
-    }
-
-    private long getCapacity(MTPDeviceConnection conn, long storageId) {
-        return lib().getCapacity(conn.deviceConn(), storageId);
-    }
-
-    private long getFreeSpace(MTPDeviceConnection conn, long storageId) {
-        return lib().getFreeSpace(conn.deviceConn(), storageId);
     }
 
     /**
@@ -468,17 +423,18 @@ public enum MTPDeviceBridge implements Closeable {
      */
     private MTPItemInfo resolveItemUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
         if (parts.length == 0) return null;
-        var libMtp = lib();
-        var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
+        var backend = backend();
+        var storage = backend.findStorage(conn.handle(), parts[0]);
         if (storage == null) throw new NoSuchFileException("/" + parts[0]);
         if (parts.length == 1) {
-            return new MTPItemInfo(0, storage.storageId(), storage.storageId(), false, 0, 0, parts[0]);
+            return new MTPItemInfo(MtpBackend.ROOT_PARENT, storage.storageId(), storage.storageId(),
+                false, 0, 0, parts[0]);
         }
-        long storageId = storage.storageId();
-        long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+        String storageId = storage.storageId();
+        String parentId = MtpBackend.ROOT_PARENT;
         MTPItemInfo found = null;
         for (int i = 1; i < parts.length; i++) {
-            var children = libMtp.getChildItems(conn.deviceConn(), storageId, parentId);
+            var children = backend.getChildItems(conn.handle(), storageId, parentId);
             final String name = parts[i];
             found = Arrays.stream(children).filter(c -> c.filename().equals(name)).findFirst().orElse(null);
             if (found == null) {
@@ -490,32 +446,33 @@ public enum MTPDeviceBridge implements Closeable {
     }
 
     private MTPItemInfo[] listChildrenUnsafe(MTPDeviceConnection conn, String[] parts) throws IOException {
-        var libMtp = lib();
+        var backend = backend();
         if (parts.length == 0) {
-            return libMtp.listStorages(conn.deviceConn()).stream()
-                .map(s -> new MTPItemInfo(0, s.storageId(), s.storageId(), false, 0, 0, s.name()))
+            return backend.listStorages(conn.handle()).stream()
+                .map(s -> new MTPItemInfo(MtpBackend.ROOT_PARENT, s.storageId(), s.storageId(),
+                    false, 0, 0, s.name()))
                 .toArray(MTPItemInfo[]::new);
         }
-        var storage = libMtp.findStorage(conn.deviceConn(), parts[0]);
+        var storage = backend.findStorage(conn.handle(), parts[0]);
         if (storage == null) throw new NoSuchFileException("/" + parts[0]);
-        long storageId = storage.storageId();
-        long parentId = LibMTP.LIBMTP_FILES_AND_FOLDERS_ROOT;
+        String storageId = storage.storageId();
+        String parentId = MtpBackend.ROOT_PARENT;
         if (parts.length > 1) {
             var dirItem = resolveItemUnsafe(conn, parts);
             if (dirItem.isFile()) throw new NotDirectoryException("/" + String.join("/", parts));
             parentId = dirItem.itemId();
         }
-        return libMtp.getChildItems(conn.deviceConn(), storageId, parentId);
+        return backend.getChildItems(conn.handle(), storageId, parentId);
     }
 
     /** Returns true if the given directory item contains any children. */
     private boolean hasChildrenUnsafe(MTPDeviceConnection conn, MTPItemInfo dir) throws IOException {
-        return lib().getChildItems(conn.deviceConn(), dir.storageId(), dir.itemId()).length > 0;
+        return backend().getChildItems(conn.handle(), dir.storageId(), dir.itemId()).length > 0;
     }
 
     /** Returns the named child of (storageId, parentId), or null if no such child exists. */
-    private MTPItemInfo findChildUnsafe(MTPDeviceConnection conn, long storageId, long parentId, String name) throws IOException {
-        var children = lib().getChildItems(conn.deviceConn(), storageId, parentId);
+    private MTPItemInfo findChildUnsafe(MTPDeviceConnection conn, String storageId, String parentId, String name) throws IOException {
+        var children = backend().getChildItems(conn.handle(), storageId, parentId);
         return Arrays.stream(children).filter(c -> c.filename().equals(name)).findFirst().orElse(null);
     }
 

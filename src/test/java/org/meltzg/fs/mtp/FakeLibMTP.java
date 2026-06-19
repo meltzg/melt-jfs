@@ -1,16 +1,17 @@
 package org.meltzg.fs.mtp;
 
+import org.meltzg.fs.mtp.types.MTPDeviceIdentifier;
+import org.meltzg.fs.mtp.types.MTPDeviceInfo;
 import org.meltzg.fs.mtp.types.MTPItemInfo;
 
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 import java.util.List;
 
 /**
- * In-memory LibMTP implementation for unit tests. Returns fixed data matching the AK100 II fixture.
- * No native libraries are loaded. Swap in via MTPDeviceBridge.setLibMTP(new FakeLibMTP()).
+ * In-memory {@link MtpBackend} implementation for unit tests. Returns fixed data matching the
+ * AK100 II fixture. No native libraries are loaded. Swap in via MTPDeviceBridge.setBackend(new FakeLibMTP()).
  */
-class FakeLibMTP implements LibMTP {
+class FakeLibMTP implements MtpBackend {
 
     static final int VENDOR_ID = 16642;       // 0x4102
     static final int PRODUCT_ID = 4497;       // 0x1191
@@ -19,131 +20,90 @@ class FakeLibMTP implements LibMTP {
     static final String MODEL_NAME = "AK100_II";
     static final String MANUFACTURER = "iriver";
     static final String STORAGE_NAME = "Internal storage";
-    static final long STORAGE_ID = 0x00010001L;
+    static final String STORAGE_ID = "65537";       // 0x00010001
     static final long CAPACITY = 512_000_000_000L;   // 512 GB (> 50 GB threshold in MTPFileStoreTest)
     static final long FREE_SPACE = 128_000_000_000L;
 
-    // Heap-backed segments: non-null, non-zero address, no native access required
-    private static final MemorySegment FAKE_ALLOCATION = MemorySegment.ofArray(new long[1]);
-    private static final MemorySegment FAKE_RAW_DEVICE = MemorySegment.ofArray(new long[1]);
-    private static final MemorySegment FAKE_DEVICE = MemorySegment.ofArray(new long[1]);
+    private static final String SIGNATURE = VENDOR_ID + ":" + PRODUCT_ID + ":1:17";
+
+    /** Opaque marker handle; the fake holds no native state. */
+    private enum FakeHandle implements DeviceHandle { INSTANCE }
+
+    private static final MTPDeviceIdentifier ID = new MTPDeviceIdentifier(VENDOR_ID, PRODUCT_ID, SERIAL);
 
     // Tests toggle this to simulate the device being unplugged/replugged.
     volatile boolean devicePresent = true;
 
     @Override
-    public RawDeviceResult detectRawDevices() throws IOException {
-        return devicePresent
-            ? new RawDeviceResult(FAKE_ALLOCATION, 1)
-            : new RawDeviceResult(MemorySegment.NULL, 0);
+    public Scan scan() {
+        boolean present = devicePresent;
+        return new Scan() {
+            @Override
+            public List<String> signatures() {
+                return present ? List.of(SIGNATURE) : List.of();
+            }
+
+            @Override
+            public OpenedDevice open(int index) {
+                var info = new MTPDeviceInfo(ID, FRIENDLY_NAME, MODEL_NAME, MANUFACTURER, 1, 17);
+                return new OpenedDevice(ID, info, FakeHandle.INSTANCE);
+            }
+
+            @Override
+            public void close() {}
+        };
     }
 
     @Override
-    public MemorySegment rawDeviceAt(MemorySegment allocation, int index) {
-        return FAKE_RAW_DEVICE;
+    public StorageResult findStorage(DeviceHandle device, String storageName) {
+        return STORAGE_NAME.equals(storageName) ? new StorageResult(STORAGE_NAME, STORAGE_ID) : null;
     }
 
     @Override
-    public short getVendorId(MemorySegment rawDevice) {
-        return (short) VENDOR_ID;
+    public long getCapacity(DeviceHandle device, String storageId) {
+        return STORAGE_ID.equals(storageId) ? CAPACITY : -1;
     }
 
     @Override
-    public short getProductId(MemorySegment rawDevice) {
-        return (short) PRODUCT_ID;
+    public long getFreeSpace(DeviceHandle device, String storageId) {
+        return STORAGE_ID.equals(storageId) ? FREE_SPACE : -1;
     }
 
     @Override
-    public int getBusLocation(MemorySegment rawDevice) {
-        return 1;
-    }
-
-    @Override
-    public byte getDevNum(MemorySegment rawDevice) {
-        return 17;
-    }
-
-    @Override
-    public MemorySegment openRawDevice(MemorySegment rawDevice) {
-        return FAKE_DEVICE;
-    }
-
-    @Override
-    public String getSerialNumber(MemorySegment device) {
-        return SERIAL;
-    }
-
-    @Override
-    public String getFriendlyName(MemorySegment device) {
-        return FRIENDLY_NAME;
-    }
-
-    @Override
-    public String getModelName(MemorySegment device) {
-        return MODEL_NAME;
-    }
-
-    @Override
-    public String getManufacturerName(MemorySegment device) {
-        return MANUFACTURER;
-    }
-
-    @Override
-    public StorageResult findStorage(MemorySegment device, String storageName) {
-        if (STORAGE_NAME.equals(storageName)) {
-            return new StorageResult(STORAGE_NAME, STORAGE_ID);
-        }
-        return null;
-    }
-
-    @Override
-    public long getCapacity(MemorySegment device, long storageId) {
-        return storageId == STORAGE_ID ? CAPACITY : -1;
-    }
-
-    @Override
-    public long getFreeSpace(MemorySegment device, long storageId) {
-        return storageId == STORAGE_ID ? FREE_SPACE : -1;
-    }
-
-    @Override
-    public List<StorageResult> listStorages(MemorySegment device) {
+    public List<StorageResult> listStorages(DeviceHandle device) {
         return List.of(new StorageResult(STORAGE_NAME, STORAGE_ID));
     }
 
     @Override
-    public MTPItemInfo[] getChildItems(MemorySegment device, long storageId, long parentId) throws IOException {
+    public MTPItemInfo[] getChildItems(DeviceHandle device, String storageId, String parentId) throws IOException {
         return new MTPItemInfo[0];
     }
 
     @Override
-    public long createFolder(MemorySegment device, String name, long parentId, long storageId) throws IOException {
-        return 1L;
+    public String createFolder(DeviceHandle device, String name, String parentId, String storageId) throws IOException {
+        return "1";
     }
 
     @Override
-    public void deleteObject(MemorySegment device, long itemId) throws IOException {}
+    public void deleteObject(DeviceHandle device, String itemId) throws IOException {}
 
     @Override
-    public void getFile(MemorySegment device, long itemId, String destPath) throws IOException {
+    public void getFile(DeviceHandle device, String itemId, String destPath) throws IOException {
         // No content in the in-memory fake; leave destPath as the (empty) temp file.
     }
 
     @Override
-    public long sendFile(MemorySegment device, String localPath, String filename,
-                         long parentId, long storageId, long filesize) throws IOException {
-        return 1L;
+    public String sendFile(DeviceHandle device, String localPath, String filename,
+                           String parentId, String storageId, long filesize) throws IOException {
+        return "1";
     }
 
     @Override
-    public void moveObject(MemorySegment device, long itemId, long storageId, long parentId) throws IOException {}
+    public void moveObject(DeviceHandle device, String itemId, String storageId, String parentId) throws IOException {}
 
     @Override
-    public void setFileName(MemorySegment device, long itemId, String newName) throws IOException {}
+    public void setFileName(DeviceHandle device, String itemId, String newName) throws IOException {}
 
     @Override
-    public void releaseDevice(MemorySegment device) {}
-
-    @Override
-    public void free(MemorySegment ptr) {}
+    public void releaseDevice(DeviceHandle device) {}
 }

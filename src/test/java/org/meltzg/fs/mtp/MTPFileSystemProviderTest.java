@@ -27,14 +27,14 @@ public class MTPFileSystemProviderTest {
 
     @BeforeClass
     public static void injectFake() throws Exception {
-        MTPDeviceBridge.setLibMTP(new FakeLibMTP());
+        MTPDeviceBridge.setBackend(new FakeLibMTP());
         MTPDeviceBridge.INSTANCE.close();
     }
 
     @AfterClass
     public static void removeFake() throws Exception {
         MTPDeviceBridge.INSTANCE.close();
-        MTPDeviceBridge.setLibMTP(null);
+        MTPDeviceBridge.setBackend(null);
     }
 
     @Before

@@ -16,7 +16,7 @@ public class MTPFileStoreTest {
 
     @BeforeClass
     public static void setUp() throws IOException, URISyntaxException {
-        MTPDeviceBridge.setLibMTP(new FakeLibMTP());
+        MTPDeviceBridge.setBackend(new FakeLibMTP());
         MTPDeviceBridge.INSTANCE.close();
         fileStore = Files.getFileStore(Paths.get(MTPFileSystemProviderTest.getURI(FakeLibMTP.STORAGE_NAME)));
     }
@@ -24,7 +24,7 @@ public class MTPFileStoreTest {
     @AfterClass
     public static void tearDown() throws IOException {
         MTPDeviceBridge.INSTANCE.close();
-        MTPDeviceBridge.setLibMTP(null);
+        MTPDeviceBridge.setBackend(null);
     }
 
     @Test

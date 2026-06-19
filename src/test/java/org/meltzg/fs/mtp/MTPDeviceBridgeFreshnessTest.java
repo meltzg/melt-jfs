@@ -23,14 +23,14 @@ public class MTPDeviceBridgeFreshnessTest {
     @Before
     public void setUp() throws IOException {
         fake = new FakeLibMTP();
-        MTPDeviceBridge.setLibMTP(fake);
+        MTPDeviceBridge.setBackend(fake);
         MTPDeviceBridge.INSTANCE.close();
     }
 
     @After
     public void tearDown() throws IOException {
         MTPDeviceBridge.INSTANCE.close();
-        MTPDeviceBridge.setLibMTP(null);
+        MTPDeviceBridge.setBackend(null);
     }
 
     @Test

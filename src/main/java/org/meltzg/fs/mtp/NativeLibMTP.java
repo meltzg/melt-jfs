@@ -5,6 +5,7 @@ import org.meltzg.fs.mtp.types.MTPItemInfo;
 import java.io.IOException;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
@@ -72,41 +73,41 @@ class NativeLibMTP implements LibMTP {
     ).withName("LIBMTP_file_t");
 
     private static final VarHandle RAW_DEVICE_VENDOR_ID =
-        RAW_DEVICE_LAYOUT.varHandle(groupElement("device_entry"), groupElement("vendor_id"));
+        vh(RAW_DEVICE_LAYOUT, groupElement("device_entry"), groupElement("vendor_id"));
     private static final VarHandle RAW_DEVICE_PRODUCT_ID =
-        RAW_DEVICE_LAYOUT.varHandle(groupElement("device_entry"), groupElement("product_id"));
+        vh(RAW_DEVICE_LAYOUT, groupElement("device_entry"), groupElement("product_id"));
     private static final VarHandle RAW_DEVICE_BUS_LOCATION =
-        RAW_DEVICE_LAYOUT.varHandle(groupElement("bus_location"));
+        vh(RAW_DEVICE_LAYOUT, groupElement("bus_location"));
     private static final VarHandle RAW_DEVICE_DEVNUM =
-        RAW_DEVICE_LAYOUT.varHandle(groupElement("devnum"));
+        vh(RAW_DEVICE_LAYOUT, groupElement("devnum"));
 
     private static final VarHandle STORAGE_ID =
-        DEVICE_STORAGE_LAYOUT.varHandle(groupElement("id"));
+        vh(DEVICE_STORAGE_LAYOUT, groupElement("id"));
     private static final VarHandle STORAGE_DESCRIPTION =
-        DEVICE_STORAGE_LAYOUT.varHandle(groupElement("StorageDescription"));
+        vh(DEVICE_STORAGE_LAYOUT, groupElement("StorageDescription"));
     private static final VarHandle STORAGE_MAX_CAPACITY =
-        DEVICE_STORAGE_LAYOUT.varHandle(groupElement("MaxCapacity"));
+        vh(DEVICE_STORAGE_LAYOUT, groupElement("MaxCapacity"));
     private static final VarHandle STORAGE_FREE_SPACE_BYTES =
-        DEVICE_STORAGE_LAYOUT.varHandle(groupElement("FreeSpaceInBytes"));
+        vh(DEVICE_STORAGE_LAYOUT, groupElement("FreeSpaceInBytes"));
     private static final VarHandle STORAGE_NEXT =
-        DEVICE_STORAGE_LAYOUT.varHandle(groupElement("next"));
+        vh(DEVICE_STORAGE_LAYOUT, groupElement("next"));
 
     private static final VarHandle FILE_ITEM_ID =
-        FILE_LAYOUT.varHandle(groupElement("item_id"));
+        vh(FILE_LAYOUT, groupElement("item_id"));
     private static final VarHandle FILE_PARENT_ID =
-        FILE_LAYOUT.varHandle(groupElement("parent_id"));
+        vh(FILE_LAYOUT, groupElement("parent_id"));
     private static final VarHandle FILE_STORAGE_ID =
-        FILE_LAYOUT.varHandle(groupElement("storage_id"));
+        vh(FILE_LAYOUT, groupElement("storage_id"));
     private static final VarHandle FILE_FILENAME =
-        FILE_LAYOUT.varHandle(groupElement("filename"));
+        vh(FILE_LAYOUT, groupElement("filename"));
     private static final VarHandle FILE_FILESIZE =
-        FILE_LAYOUT.varHandle(groupElement("filesize"));
+        vh(FILE_LAYOUT, groupElement("filesize"));
     private static final VarHandle FILE_MODIFICATIONDATE =
-        FILE_LAYOUT.varHandle(groupElement("modificationdate"));
+        vh(FILE_LAYOUT, groupElement("modificationdate"));
     private static final VarHandle FILE_FILETYPE =
-        FILE_LAYOUT.varHandle(groupElement("filetype"));
+        vh(FILE_LAYOUT, groupElement("filetype"));
     private static final VarHandle FILE_NEXT =
-        FILE_LAYOUT.varHandle(groupElement("next"));
+        vh(FILE_LAYOUT, groupElement("next"));
 
     private final MethodHandle init;
     private final MethodHandle releaseDevice;
@@ -177,6 +178,12 @@ class NativeLibMTP implements LibMTP {
         } catch (Throwable t) {
             throw new RuntimeException("Failed to initialize libmtp", t);
         }
+    }
+
+    // As of the finalized FFM API (JDK 22), layout-derived VarHandles carry a leading `long`
+    // base-offset coordinate. We bind it to 0 here so call sites keep using just the segment.
+    private static VarHandle vh(MemoryLayout layout, MemoryLayout.PathElement... path) {
+        return MethodHandles.insertCoordinates(layout.varHandle(path), 1, 0L);
     }
 
     private static MethodHandle bind(Linker linker, SymbolLookup lookup, String name, FunctionDescriptor desc) {
@@ -348,7 +355,7 @@ class NativeLibMTP implements LibMTP {
     @Override
     public long createFolder(MemorySegment device, String name, long parentId, long storageId) throws IOException {
         try (var arena = Arena.ofConfined()) {
-            var nameSeg = arena.allocateUtf8String(name);
+            var nameSeg = arena.allocateFrom(name);
             int folderId = (int) createFolderFn.invokeExact(device, nameSeg, (int) parentId, (int) storageId);
             if (folderId == 0) throw new IOException("LIBMTP_Create_Folder failed for: " + name);
             return Integer.toUnsignedLong(folderId);
@@ -374,7 +381,7 @@ class NativeLibMTP implements LibMTP {
     @Override
     public void getFile(MemorySegment device, long itemId, String destPath) throws IOException {
         try (var arena = Arena.ofConfined()) {
-            var pathSeg = arena.allocateUtf8String(destPath);
+            var pathSeg = arena.allocateFrom(destPath);
             int ret;
             try {
                 ret = (int) getFileToFile.invokeExact(
@@ -396,11 +403,11 @@ class NativeLibMTP implements LibMTP {
             var fileData = arena.allocate(FILE_LAYOUT);
             FILE_PARENT_ID.set(fileData, (int) parentId);
             FILE_STORAGE_ID.set(fileData, (int) storageId);
-            FILE_FILENAME.set(fileData, arena.allocateUtf8String(filename));
+            FILE_FILENAME.set(fileData, arena.allocateFrom(filename));
             FILE_FILESIZE.set(fileData, filesize);
             FILE_FILETYPE.set(fileData, LIBMTP_FILETYPE_UNKNOWN);
 
-            var pathSeg = arena.allocateUtf8String(localPath);
+            var pathSeg = arena.allocateFrom(localPath);
             int ret;
             try {
                 ret = (int) sendFileFromFile.invokeExact(
@@ -434,7 +441,7 @@ class NativeLibMTP implements LibMTP {
             var fileData = arena.allocate(FILE_LAYOUT);
             FILE_ITEM_ID.set(fileData, (int) itemId);
             FILE_FILETYPE.set(fileData, LIBMTP_FILETYPE_UNKNOWN);
-            var nameSeg = arena.allocateUtf8String(newName);
+            var nameSeg = arena.allocateFrom(newName);
             int ret;
             try {
                 ret = (int) setFileNameFn.invokeExact(device, fileData, nameSeg);
@@ -478,6 +485,6 @@ class NativeLibMTP implements LibMTP {
 
     private String readCString(MemorySegment ptr) {
         if (ptr == null || MemorySegment.NULL.equals(ptr)) return "";
-        return ptr.reinterpret(Long.MAX_VALUE).getUtf8String(0);
+        return ptr.reinterpret(Long.MAX_VALUE).getString(0);
     }
 }

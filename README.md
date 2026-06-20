@@ -39,6 +39,33 @@ which ships with Windows. The device must be in **MTP mode** and visible in File
 ./gradlew build
 ```
 
+## Publishing a release
+
+Releases go to Maven Central (Sonatype Central Portal) automatically. Pushing a `vMAJOR.MINOR.PATCH`
+tag triggers the [`release`](.github/workflows/release.yml) workflow, which derives the artifact
+version from the tag (e.g. `v0.1.0` → `0.1.0`), then signs and uploads the JAR, sources, and javadoc.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+One-time setup — add these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|--------|-------|
+| `MAVEN_CENTRAL_USERNAME` | Central Portal user token username (Account → Generate User Token at central.sonatype.com) |
+| `MAVEN_CENTRAL_PASSWORD` | Central Portal user token password |
+| `SIGNING_KEY` | ASCII-armored GPG private key (`gpg --armor --export-secret-keys <KEY_ID>`) |
+| `SIGNING_PASSWORD` | Passphrase for that GPG key |
+
+The public half of the signing key must be distributed to a public keyserver (e.g.
+`gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>`) so Central can verify the signatures.
+
+To inspect a deployment before it goes public instead of auto-releasing, set
+`mavenCentralAutomaticPublishing=false` in `gradle.properties` and release it manually from
+[the portal](https://central.sonatype.com/publishing/deployments).
+
 ## Running tests
 
 The unit tests use a `FakeLibMTP` test double — no physical device and no native libraries are needed. `./gradlew test` runs cleanly in CI.
@@ -121,6 +148,28 @@ mtp://1949:3:ABC12345/Internal Storage/Music/song.mp3   ← file
 ```
 
 Names containing spaces or other special characters are percent-encoded in the URI (e.g. `Internal%20Storage`), but `Path.toString()` always returns the decoded form.
+
+## Adding the dependency
+
+Released to Maven Central under `io.github.meltzg:melt-jfs`.
+
+Gradle (Kotlin DSL):
+
+```kotlin
+dependencies {
+    implementation("io.github.meltzg:melt-jfs:0.1.0")
+}
+```
+
+Maven:
+
+```xml
+<dependency>
+    <groupId>io.github.meltzg</groupId>
+    <artifactId>melt-jfs</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
 
 ## Using melt-jfs in a Java program
 

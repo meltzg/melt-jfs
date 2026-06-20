@@ -371,8 +371,14 @@ class NativeLibMTP implements MtpBackend {
     @Override
     public MTPItemInfo[] getChildItems(DeviceHandle handle, String storageId, String parentId) throws IOException {
         try {
+            // A non-root parent handle already pins the folder uniquely, so search across every
+            // storage (LIBMTP_FILES_AND_FOLDERS_ROOT == 0xFFFFFFFF doubles as the "all storages"
+            // id). Pairing a concrete storage id with a non-root parent makes some devices return
+            // nothing, which surfaces as a populated subfolder browsing empty. The storage-root
+            // listing keeps its concrete storage id so each storage's top level stays separate.
+            int storageArg = parentId.equals(ROOT_PARENT) ? toHandle(storageId) : LIBMTP_FILES_AND_FOLDERS_ROOT;
             var filePtr = (MemorySegment) getFilesAndFolders.invokeExact(
-                dev(handle), toHandle(storageId), toHandle(parentId));
+                dev(handle), storageArg, toHandle(parentId));
 
             var items = new ArrayList<MTPItemInfo>();
             while (!MemorySegment.NULL.equals(filePtr)) {

@@ -7,6 +7,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -21,12 +22,28 @@ public enum MTPDeviceBridge implements Closeable {
     // How long a device scan is trusted before getInstance() re-detects attached devices.
     private static final long DETECT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2);
 
+    // How long a cached directory listing is trusted before the device is re-queried. Keeps a
+    // full walk fast (every path is re-resolved from the storage root, so the same parents are
+    // listed repeatedly within milliseconds) while still letting out-of-band changes on the
+    // device surface within a couple of seconds.
+    private static final long LISTING_TTL_NANOS = TimeUnit.SECONDS.toNanos(2);
+
     private ReentrantReadWriteLock connectionLock;
     private Map<MTPDeviceIdentifier, MTPDeviceInfo> deviceInfo;
     private LinkedHashMap<MTPDeviceIdentifier, MTPDeviceConnection> deviceConns;
     // The scan whose opened devices are currently live; held so its native resources outlive the
     // connections and are released together in closeUnsafe(). Null when nothing is open.
     private MtpBackend.Scan currentScan;
+
+    // Short-lived cache of directory listings, scoped to the currently-open connections. Without
+    // it, walking a tree of N nodes at depth D issues O(N*D) USB listings because every path is
+    // re-resolved from the storage root; with it, each directory is listed at most once per TTL
+    // window. Cleared on any mutation and whenever the open connections are torn down.
+    private final Map<ListingKey, ChildListing> listingCache = new ConcurrentHashMap<>();
+
+    private record ListingKey(MTPDeviceIdentifier deviceId, String storageId, String parentId) {}
+
+    private record ChildListing(MTPItemInfo[] items, long fetchedNanos) {}
 
     // Signatures of the devices seen at the last scan, used to detect hot-plug/unplug/reconnect
     // without reopening still-present devices.
@@ -179,16 +196,20 @@ public enum MTPDeviceBridge implements Closeable {
             }
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                var backend = backend();
-                var storage = backend.findStorage(conn.handle(), parts[0]);
-                if (storage == null) throw new NoSuchFileException("/" + parts[0]);
-                String parentId = MtpBackend.ROOT_PARENT;
-                if (parts.length > 2) {
-                    var parentParts = Arrays.copyOf(parts, parts.length - 1);
-                    var parentItem = resolveItemUnsafe(conn, parentParts);
-                    parentId = parentItem.itemId();
+                try {
+                    var backend = backend();
+                    var storage = backend.findStorage(conn.handle(), parts[0]);
+                    if (storage == null) throw new NoSuchFileException("/" + parts[0]);
+                    String parentId = MtpBackend.ROOT_PARENT;
+                    if (parts.length > 2) {
+                        var parentParts = Arrays.copyOf(parts, parts.length - 1);
+                        var parentItem = resolveItemUnsafe(conn, parentParts);
+                        parentId = parentItem.itemId();
+                    }
+                    backend.createFolder(conn.handle(), parts[parts.length - 1], parentId, storage.storageId());
+                } finally {
+                    invalidateListings();
                 }
-                backend.createFolder(conn.handle(), parts[parts.length - 1], parentId, storage.storageId());
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -201,9 +222,13 @@ public enum MTPDeviceBridge implements Closeable {
             var parts = pathParts(path);
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                var item = resolveItemUnsafe(conn, parts);
-                if (item == null) throw new NoSuchFileException(path);
-                backend().deleteObject(conn.handle(), item.itemId());
+                try {
+                    var item = resolveItemUnsafe(conn, parts);
+                    if (item == null) throw new NoSuchFileException(path);
+                    backend().deleteObject(conn.handle(), item.itemId());
+                } finally {
+                    invalidateListings();
+                }
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -224,29 +249,33 @@ public enum MTPDeviceBridge implements Closeable {
             }
             var conn = requireConnection(deviceId);
             synchronized (conn) {
-                var backend = backend();
-                var storage = backend.findStorage(conn.handle(), parts[0]);
-                if (storage == null) throw new NoSuchFileException("/" + parts[0]);
-                String parentId = MtpBackend.ROOT_PARENT;
-                if (parts.length > 2) {
-                    var parentParts = Arrays.copyOf(parts, parts.length - 1);
-                    var parentItem = resolveItemUnsafe(conn, parentParts);
-                    if (parentItem.isFile()) {
-                        throw new NotDirectoryException("/" + String.join("/", parentParts));
+                try {
+                    var backend = backend();
+                    var storage = backend.findStorage(conn.handle(), parts[0]);
+                    if (storage == null) throw new NoSuchFileException("/" + parts[0]);
+                    String parentId = MtpBackend.ROOT_PARENT;
+                    if (parts.length > 2) {
+                        var parentParts = Arrays.copyOf(parts, parts.length - 1);
+                        var parentItem = resolveItemUnsafe(conn, parentParts);
+                        if (parentItem.isFile()) {
+                            throw new NotDirectoryException("/" + String.join("/", parentParts));
+                        }
+                        parentId = parentItem.itemId();
                     }
-                    parentId = parentItem.itemId();
-                }
-                var name = parts[parts.length - 1];
-                var existing = findChildUnsafe(conn, storage.storageId(), parentId, name);
-                if (existing != null) {
-                    if (!existing.isFile()) {
-                        throw new IOException("Target exists and is a directory: " + path);
+                    var name = parts[parts.length - 1];
+                    var existing = findChildUnsafe(conn, storage.storageId(), parentId, name);
+                    if (existing != null) {
+                        if (!existing.isFile()) {
+                            throw new IOException("Target exists and is a directory: " + path);
+                        }
+                        backend.deleteObject(conn.handle(), existing.itemId());
                     }
-                    backend.deleteObject(conn.handle(), existing.itemId());
+                    long size = java.nio.file.Files.size(localFile);
+                    return backend.sendFile(conn.handle(), localFile.toString(),
+                        name, parentId, storage.storageId(), size);
+                } finally {
+                    invalidateListings();
                 }
-                long size = java.nio.file.Files.size(localFile);
-                return backend.sendFile(conn.handle(), localFile.toString(),
-                    name, parentId, storage.storageId(), size);
             }
         } finally {
             connectionLock.readLock().unlock();
@@ -319,6 +348,8 @@ public enum MTPDeviceBridge implements Closeable {
                     // Many devices do not implement MoveObject/SetObjectName; let the caller emulate.
                     throw new MTPOperationUnsupportedException(
                         "Native move failed for " + sourcePath + " -> " + targetPath, nativeError);
+                } finally {
+                    invalidateListings();
                 }
             }
         } finally {
@@ -403,6 +434,7 @@ public enum MTPDeviceBridge implements Closeable {
         }
         deviceInfo.clear();
         deviceConns.clear();
+        invalidateListings();
         lastSignature = Set.of();
         devicesDetected = false;
     }
@@ -434,7 +466,7 @@ public enum MTPDeviceBridge implements Closeable {
         String parentId = MtpBackend.ROOT_PARENT;
         MTPItemInfo found = null;
         for (int i = 1; i < parts.length; i++) {
-            var children = backend.getChildItems(conn.handle(), storageId, parentId);
+            var children = cachedChildItems(conn, storageId, parentId);
             final String name = parts[i];
             found = Arrays.stream(children).filter(c -> c.filename().equals(name)).findFirst().orElse(null);
             if (found == null) {
@@ -462,18 +494,39 @@ public enum MTPDeviceBridge implements Closeable {
             if (dirItem.isFile()) throw new NotDirectoryException("/" + String.join("/", parts));
             parentId = dirItem.itemId();
         }
-        return backend.getChildItems(conn.handle(), storageId, parentId);
+        return cachedChildItems(conn, storageId, parentId);
     }
 
     /** Returns true if the given directory item contains any children. */
     private boolean hasChildrenUnsafe(MTPDeviceConnection conn, MTPItemInfo dir) throws IOException {
-        return backend().getChildItems(conn.handle(), dir.storageId(), dir.itemId()).length > 0;
+        return cachedChildItems(conn, dir.storageId(), dir.itemId()).length > 0;
     }
 
     /** Returns the named child of (storageId, parentId), or null if no such child exists. */
     private MTPItemInfo findChildUnsafe(MTPDeviceConnection conn, String storageId, String parentId, String name) throws IOException {
-        var children = backend().getChildItems(conn.handle(), storageId, parentId);
+        var children = cachedChildItems(conn, storageId, parentId);
         return Arrays.stream(children).filter(c -> c.filename().equals(name)).findFirst().orElse(null);
+    }
+
+    /**
+     * Returns the children of {@code (storageId, parentId)}, serving a cached listing when one was
+     * fetched within {@link #LISTING_TTL_NANOS}. The cached array is shared with callers, which only
+     * ever read it. Callers must hold the read lock and the connection monitor.
+     */
+    private MTPItemInfo[] cachedChildItems(MTPDeviceConnection conn, String storageId, String parentId) throws IOException {
+        var key = new ListingKey(conn.deviceId(), storageId, parentId);
+        var cached = listingCache.get(key);
+        if (cached != null && System.nanoTime() - cached.fetchedNanos() < LISTING_TTL_NANOS) {
+            return cached.items();
+        }
+        var items = backend().getChildItems(conn.handle(), storageId, parentId);
+        listingCache.put(key, new ChildListing(items, System.nanoTime()));
+        return items;
+    }
+
+    /** Drops every cached listing. Called after any mutation and when connections are torn down. */
+    private void invalidateListings() {
+        listingCache.clear();
     }
 
     static String[] pathParts(String path) {

@@ -1,6 +1,12 @@
 plugins {
     `java-library`
+    id("com.vanniktech.maven.publish") version "0.36.0"
 }
+
+// Coordinates: io.github.meltzg:melt-jfs:<version>. The version is supplied by the release workflow
+// from the git tag (VERSION env var); local builds get a SNAPSHOT so they never collide with a release.
+group = "io.github.meltzg"
+version = System.getenv("VERSION") ?: "0.0.0-SNAPSHOT"
 
 java {
     // FFM (java.lang.foreign) was finalized in Java 22, so no --enable-preview is needed.
@@ -57,4 +63,46 @@ tasks.register<Test>("integrationTest") {
     maxParallelForks = 1
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     shouldRunAfter(tasks.test)
+}
+
+mavenPublishing {
+    // Publishes to the Sonatype Central Portal (central.sonatype.com), where the io.github.meltzg
+    // namespace is registered. Since 0.34.0 this is the only target (legacy OSSRH was removed), so
+    // the call takes no host argument. Whether the upload is auto-released or left in the portal for
+    // manual review is controlled by mavenCentralAutomaticPublishing in gradle.properties.
+    publishToMavenCentral()
+    // GPG-sign every artifact; Central rejects unsigned uploads. The key is provided in-memory by
+    // the release workflow via ORG_GRADLE_PROJECT_signingInMemoryKey(+Password).
+    signAllPublications()
+
+    // Auto-generates the sources and javadoc JARs that Central requires alongside the main JAR.
+    coordinates(group.toString(), "melt-jfs", version.toString())
+
+    pom {
+        name.set("melt-jfs")
+        description.set(
+            "A Java NIO FileSystemProvider for MTP devices (Android phones, audio players), " +
+                "built on the Java Foreign Function & Memory API with no native build step.",
+        )
+        url.set("https://github.com/meltzg/melt-jfs")
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+                distribution.set("repo")
+            }
+        }
+        developers {
+            developer {
+                id.set("meltzg")
+                name.set("Gregory Meltzer")
+                url.set("https://github.com/meltzg")
+            }
+        }
+        scm {
+            connection.set("scm:git:git://github.com/meltzg/melt-jfs.git")
+            developerConnection.set("scm:git:ssh://git@github.com/meltzg/melt-jfs.git")
+            url.set("https://github.com/meltzg/melt-jfs")
+        }
+    }
 }
